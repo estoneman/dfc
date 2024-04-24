@@ -25,6 +25,14 @@ void print_cmds(void) {
   }
 }
 
+void dfc_print_config(DFCConfig *dfc_config) {
+  fprintf(stderr, "DFCConfig {\n  no. servers = %zu\n", dfc_config->n_servers);
+  for (size_t i = 0; i < dfc_config->n_servers; ++i) {
+    fprintf(stderr, "  server %zu: %s\n", i, dfc_config->servers[i]);
+  }
+  fputs("}\n", stderr);
+}
+
 void usage(const char *program) {
   fprintf(stderr, "usage: %s <command> [filename] ... [filename]\n", program);
   fprintf(stderr, "supported commands:\n");
@@ -40,7 +48,7 @@ int main(int argc, char *argv[]) {
   pthread_t read_conf_tid;
   pthread_t file_proc_tids[argc];
   size_t n_files;
-  DFCConfig dfc_config;
+  DFCConfig *dfc_config;
   DFCOperation dfc_op;
 
   if (argc < 2) {
@@ -50,8 +58,15 @@ int main(int argc, char *argv[]) {
     return EXIT_FAILURE;
   }
 
-  dfc_config.servers = (char **)malloc(sizeof(char *) * MAX_SERVERS);
-  if (chk_alloc_err(dfc_config.servers, "malloc", __func__, __LINE__ - 1) ==
+  dfc_config = (DFCConfig *)malloc(sizeof(DFCConfig));
+  if (chk_alloc_err(dfc_config, "malloc", __func__, __LINE__ - 1) == -1) {
+    fprintf(stderr, "[ERROR] out of memory\n");
+
+    return EXIT_FAILURE;
+  }
+
+  dfc_config->servers = (char **)malloc(sizeof(char *) * MAX_SERVERS);
+  if (chk_alloc_err(dfc_config->servers, "malloc", __func__, __LINE__ - 1) ==
       -1) {
     fprintf(stderr, "[ERORR] out of memory\n");
 
@@ -59,8 +74,8 @@ int main(int argc, char *argv[]) {
   }
 
   for (size_t i = 0; i < MAX_SERVERS; ++i) {
-    dfc_config.servers[i] = (char *)alloc_buf(CONF_MAXLINE);
-    if (chk_alloc_err(dfc_config.servers[i], "malloc", __func__,
+    dfc_config->servers[i] = (char *)alloc_buf(CONF_MAXLINE);
+    if (chk_alloc_err(dfc_config->servers[i], "malloc", __func__,
                       __LINE__ - 1) == -1) {
       fprintf(stderr, "[ERROR] out of memory\n");
 
@@ -68,8 +83,8 @@ int main(int argc, char *argv[]) {
     }
   }
 
-  dfc_config.n_servers = 0;
-  if (pthread_create(&read_conf_tid, NULL, read_config, &dfc_config) < 0) {
+  dfc_config->n_servers = 0;
+  if (pthread_create(&read_conf_tid, NULL, read_config, dfc_config) < 0) {
     fprintf(stderr, "[ERROR] could not create thread: %s:%d\n", __func__,
             __LINE__ - 1);
     exit(EXIT_FAILURE);
@@ -132,10 +147,6 @@ int main(int argc, char *argv[]) {
     }
 
     for (size_t i = 2; i < (size_t)argc; ++i) {
-      fprintf(stderr, "[INFO] putting file: %s\n", argv[i]);
-
-      // TODO: fix race conditions between threads `read_config` and
-      //       `handle_put1`
       file_proc_tids[i] = i;
       dfc_op.filename = argv[i];
       dfc_op.dfc_config = dfc_config;
@@ -151,14 +162,14 @@ int main(int argc, char *argv[]) {
   }
 
   // free resources
+  pthread_join(read_conf_tid, NULL);
   for (size_t i = 2; i < (size_t)argc; ++i) {
     pthread_join(file_proc_tids[i], NULL);
   }
 
-  pthread_join(read_conf_tid, NULL);
-
   destroy_bloom_filter(bf);
-  free(dfc_config.servers);
+  free(dfc_config->servers);
+  free(dfc_config);
 
   return EXIT_SUCCESS;
 }
