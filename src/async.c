@@ -7,6 +7,7 @@
 
 #include "dfc/dfc.h"
 #include "dfc/dfc_util.h"
+#include "dfc/bloom_filter.h"
 
 pthread_rwlock_t conf_lock = PTHREAD_RWLOCK_INITIALIZER;
 
@@ -25,6 +26,7 @@ void *handle_put(void *arg) {
   char **chunks;
   size_t *chunk_sizes;
   size_t len_file;
+  unsigned short fname_hash, start_index;
 
   pthread_rwlock_rdlock(&conf_lock);
   fprintf(stderr, "[%s] acquired rdlock on 'conf lock'\n", __func__);
@@ -52,6 +54,16 @@ void *handle_put(void *arg) {
     free(file_contents);
 
     exit(EXIT_FAILURE);
+  }
+
+  // get hash of filename
+  fname_hash = hash_djb2(dfc_op->filename);
+  start_index = fname_hash % dfc_op->dfc_config->n_servers;
+  for (size_t i = 0, j; i < dfc_op->dfc_config->n_servers; ++i) { 
+    j = (start_index + i) % dfc_op->dfc_config->n_servers;
+    fprintf(stderr, "[%s] would have sent pieces %zu and %zu to server %s\n",
+            __func__, i, (i + 1) % dfc_op->dfc_config->n_servers,
+            dfc_op->dfc_config->servers[j]);
   }
 
   // free resources
