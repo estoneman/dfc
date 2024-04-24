@@ -20,13 +20,15 @@ typedef struct {
 
 typedef struct {
   char *filename;
-  DFCConfig dfc_config;
+  DFCConfig *dfc_config;
 } DFCOperation;
 
 #define N_CMD_SUPP sizeof(dfc_cmds) / sizeof(dfc_cmds[0])
 
+// debug functions
 void print_cmd(DFCCommand dfc_cmd);
 void print_cmds(void);
 void usage(const char *);
+void dfc_print_config(DFCConfig *);
 
 #endif  // DFC_H_
