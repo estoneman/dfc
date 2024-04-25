@@ -1,8 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#include "dfc/bloom_filter.h"
 #include "dfc/dfc_util.h"
+#include "dfc/bloom_filter.h"
 
 void add_bloom_filter(BloomFilter *bf, const char *s) {
   unsigned short h1, h2;
