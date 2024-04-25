@@ -147,7 +147,6 @@ int main(int argc, char *argv[]) {
     }
 
     for (size_t i = 2; i < (size_t)argc; ++i) {
-      file_proc_tids[i] = i;
       dfc_op.filename = argv[i];
       dfc_op.dfc_config = dfc_config;
 
