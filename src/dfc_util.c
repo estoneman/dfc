@@ -1,3 +1,4 @@
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -103,6 +104,31 @@ char *read_file(const char *fpath, size_t *nb_read) {
   fclose(fp);
 
   return out_buf;
+}
+
+ssize_t read_until(char *haystack, size_t len_haystack, char end, char *sink,
+                   size_t len_sink) {
+  // move past input
+  while (isspace(*haystack)) {
+    haystack += 1;
+  }
+
+  // up to the length of the input buffer, read as many characters that are
+  // allowed in `sink`
+  size_t i;
+  for (i = 0; i < len_haystack && i < len_sink && haystack[i] != end; ++i) {
+    sink[i] = haystack[i];
+  }
+
+  // if `end` not found
+  if (haystack[i] != end) {
+    return -1;
+  }
+
+  sink[i] = '\0';
+
+  // move pointer to next character
+  return (ssize_t)i + 1;
 }
 
 char **split_file(char *file_contents, size_t *chunk_sizes, size_t n_chunks) {
