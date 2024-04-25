@@ -1,6 +1,6 @@
 CC:=$(shell which gcc)
 
-CFLAGS:=-Wall -Werror -Wextra -pedantic -fsanitize=undefined -fanalyzer -g -std=gnu11
+CFLAGS:=-Wall -Werror -Wextra -pedantic -fsanitize=undefined -fanalyzer -DDEBUG -g -std=gnu11
 INCLUDE:=include/
 LIBS:=-pthread
 
