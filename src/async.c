@@ -66,7 +66,8 @@ void *handle_put(void *arg) {
   get_chunk_sizes(len_file, n_servers, chunk_sizes);
   file_pieces = split_file(file_contents, chunk_sizes, n_servers);
 
-  // given n_servers, calculate number of pairs to generate
+  // given n_servers, check if split is required (n_servers > 1)
+  // cannot be zero, get_chunk_sizes checks this
   split = n_servers == 1 ? 0 : 1;
 
   srv_alloc_idx = hash_fnv1a(dfc_op->filename) % n_servers;
@@ -90,11 +91,6 @@ void *handle_put(void *arg) {
   for (size_t i = 0; i < n_servers; ++i) {
     j = (srv_alloc_idx + i) % n_servers; 
 
-    if ((sk_buf[j].dfc_hdr = (DFCHeader *)malloc(sizeof(DFCHeader))) == NULL) {
-      fprintf(stderr, "[FATAL] out of memory\n");
-      exit(EXIT_FAILURE);
-    }
-    
     // get hostname
     port_offset = 0;
     if ((port_offset =
@@ -134,23 +130,25 @@ void *handle_put(void *arg) {
     pthread_rwlock_wrlock(&skb_lock);
     sk_buf[j].sockfd = sockfd;
 
-    strncpy(sk_buf[j].dfc_hdr->cmd, "put", sizeof(dfc_hdr.cmd));
-    sk_buf[j].dfc_hdr->filename = dfc_op->filename;
-    sk_buf[j].dfc_hdr->offset = chunk_sizes[j];
+    strncpy(dfc_hdr.cmd, "put", sizeof(dfc_hdr.cmd));
+    dfc_hdr.filename = dfc_op->filename;
+    dfc_hdr.offset = chunk_sizes[j];
 
     ssize_t total_len;
     size_t hdr_len;
 
-    // copy header
-    hdr_len = sizeof(sk_buf[j].dfc_hdr->cmd) + strlen(sk_buf[j].dfc_hdr->filename) + sizeof(sk_buf[j].dfc_hdr->offset);
+    hdr_len = sizeof(dfc_hdr.cmd) + strlen(dfc_hdr.filename) + sizeof(dfc_hdr.offset);
+
+    // allocate space for header and data
     if ((sk_buf[j].data = alloc_buf(len_pair + hdr_len)) == NULL) {
       fprintf(stderr, "[FATAL] out of memory\n");
       exit(EXIT_FAILURE);
     }
 
-    memcpy(sk_buf[j].data, sk_buf[j].dfc_hdr->cmd, sizeof(sk_buf[j].dfc_hdr->cmd));
-    memcpy(sk_buf[j].data + sizeof(sk_buf[j].dfc_hdr->cmd), sk_buf[j].dfc_hdr->filename, strlen(sk_buf[j].dfc_hdr->filename));
-    memcpy(sk_buf[j].data + sizeof(sk_buf[j].dfc_hdr->cmd) + strlen(sk_buf[j].dfc_hdr->filename), &sk_buf[j].dfc_hdr->offset, sizeof(sk_buf[j].dfc_hdr->offset));
+    // copy header
+    memcpy(sk_buf[j].data, dfc_hdr.cmd, sizeof(dfc_hdr.cmd));
+    memcpy(sk_buf[j].data + sizeof(dfc_hdr.cmd), dfc_hdr.filename, strlen(dfc_hdr.filename));
+    memcpy(sk_buf[j].data + sizeof(dfc_hdr.cmd) + strlen(dfc_hdr.filename), &dfc_hdr.offset, sizeof(dfc_hdr.offset));
 
     // copy data
     memcpy(sk_buf[j].data + hdr_len, pair, len_pair);
@@ -180,8 +178,6 @@ void *handle_put(void *arg) {
         perror("close");
       }
     }
-
-    free(sk_buf[i].dfc_hdr);
   }
 
   free(pair);
