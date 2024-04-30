@@ -21,10 +21,11 @@ void *async_dfc_send(void *arg) {
   sk_buf = (SocketBuffer *)arg;
 
   // send data
-  if ((bytes_sent = dfc_send(sk_buf->sockfd, sk_buf->data, sk_buf->len_data)) != sk_buf->len_data) {
+  if ((bytes_sent = dfc_send(sk_buf->sockfd, sk_buf->data, sk_buf->len_data)) !=
+      sk_buf->len_data) {
     fprintf(stderr, "[ERROR] incomplete send\n");
   }
-  
+
   pthread_rwlock_unlock(&skb_lock);
 
   return NULL;
@@ -89,7 +90,7 @@ void *handle_put(void *arg) {
   size_t len_pair;
 
   for (size_t i = 0; i < n_servers; ++i) {
-    j = (srv_alloc_idx + i) % n_servers; 
+    j = (srv_alloc_idx + i) % n_servers;
 
     // get hostname
     port_offset = 0;
@@ -110,10 +111,10 @@ void *handle_put(void *arg) {
 
       exit(EXIT_FAILURE);
     }
-    
+
     if (split) {
-      merge(file_pieces[j], chunk_sizes[j],
-            file_pieces[(j + 1) % n_servers], chunk_sizes[(j + 1) % n_servers], pair);
+      merge(file_pieces[j], chunk_sizes[j], file_pieces[(j + 1) % n_servers],
+            chunk_sizes[(j + 1) % n_servers], pair);
       len_pair = chunk_sizes[j] + chunk_sizes[(j + 1) % n_servers];
     } else {
       memcpy(pair, file_pieces[j], chunk_sizes[j]);
@@ -122,7 +123,8 @@ void *handle_put(void *arg) {
 
     // connect to server `j`
     if ((sockfd = connection_sockfd(hostname, port)) == -1) {
-      fprintf(stderr, "[%s] could not connect to server %s:%s\n", __func__, hostname, port);
+      fprintf(stderr, "[%s] could not connect to server %s:%s\n", __func__,
+              hostname, port);
 
       continue;
     }
@@ -137,7 +139,8 @@ void *handle_put(void *arg) {
     ssize_t total_len;
     size_t hdr_len;
 
-    hdr_len = sizeof(dfc_hdr.cmd) + strlen(dfc_hdr.filename) + sizeof(dfc_hdr.offset);
+    hdr_len =
+        sizeof(dfc_hdr.cmd) + strlen(dfc_hdr.filename) + sizeof(dfc_hdr.offset);
 
     // allocate space for header and data
     if ((sk_buf[j].data = alloc_buf(len_pair + hdr_len)) == NULL) {
@@ -147,8 +150,10 @@ void *handle_put(void *arg) {
 
     // copy header
     memcpy(sk_buf[j].data, dfc_hdr.cmd, sizeof(dfc_hdr.cmd));
-    memcpy(sk_buf[j].data + sizeof(dfc_hdr.cmd), dfc_hdr.filename, strlen(dfc_hdr.filename));
-    memcpy(sk_buf[j].data + sizeof(dfc_hdr.cmd) + strlen(dfc_hdr.filename), &dfc_hdr.offset, sizeof(dfc_hdr.offset));
+    memcpy(sk_buf[j].data + sizeof(dfc_hdr.cmd), dfc_hdr.filename,
+           strlen(dfc_hdr.filename));
+    memcpy(sk_buf[j].data + sizeof(dfc_hdr.cmd) + strlen(dfc_hdr.filename),
+           &dfc_hdr.offset, sizeof(dfc_hdr.offset));
 
     // copy data
     memcpy(sk_buf[j].data + hdr_len, pair, len_pair);
@@ -162,7 +167,8 @@ void *handle_put(void *arg) {
     fprintf(stderr, "[%s] sending pieces %d and %zu to %s:%s\n", __func__, j,
             (j + 1) % n_servers, hostname, port);
 #endif
-    if (pthread_create(&send_threads[j], NULL, async_dfc_send, &sk_buf[j]) == -1) {
+    if (pthread_create(&send_threads[j], NULL, async_dfc_send, &sk_buf[j]) ==
+        -1) {
       fprintf(stderr, "[%s] could not create thread %zu\n", __func__, i);
       exit(EXIT_FAILURE);
     }
@@ -186,7 +192,7 @@ void *handle_put(void *arg) {
 }
 
 void print_header(DFCHeader *dfc_hdr) {
-  fputs("DFCHeader {\n", stderr); 
+  fputs("DFCHeader {\n", stderr);
   fprintf(stderr, "  cmd: %s\n", dfc_hdr->cmd);
   fprintf(stderr, "  filename: %s\n", dfc_hdr->filename);
   fprintf(stderr, "  offset: %zu\n", dfc_hdr->offset);

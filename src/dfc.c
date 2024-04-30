@@ -3,10 +3,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "dfc/dfc.h"
 #include "dfc/async.h"
 #include "dfc/bloom_filter.h"
 #include "dfc/dfc_util.h"
+#include "dfc/dfc.h"
 
 DFCCommand dfc_cmds[] = {{.cmd = "get", .hash = 0},
                          {.cmd = "list", .hash = 0},
@@ -37,9 +37,9 @@ int run_handler(char **argv, unsigned int cmd_hash, size_t n_files) {
       strncpy(dfc_op[i].filename, argv[i], PATH_MAX);
       dfc_op[i].dfc_config = dfc_config;
 
-
       file_proc_tids[i] = i;
-      if (pthread_create(&file_proc_tids[i], NULL, handle_get, &dfc_op[i]) < 0) {
+      if (pthread_create(&file_proc_tids[i], NULL, handle_get, &dfc_op[i]) <
+          0) {
         fprintf(stderr, "[ERROR] could not create thread: %s:%d\n", __func__,
                 __LINE__ - 1);
         exit(EXIT_FAILURE);
@@ -59,7 +59,8 @@ int run_handler(char **argv, unsigned int cmd_hash, size_t n_files) {
       strncpy(dfc_op[i].filename, argv[i], PATH_MAX);
       dfc_op[i].dfc_config = dfc_config;
 
-      if (pthread_create(&file_proc_tids[i], NULL, handle_put, &dfc_op[i]) < 0) {
+      if (pthread_create(&file_proc_tids[i], NULL, handle_put, &dfc_op[i]) <
+          0) {
         fprintf(stderr, "[ERROR] could not create thread: %s:%d\n", __func__,
                 __LINE__ - 1);
         exit(EXIT_FAILURE);
@@ -119,7 +120,8 @@ void print_op(DFCOperation *dfc_op) {
 }
 
 void print_config(DFCConfig *dfc_config) {
-  fprintf(stderr, "  DFCConfig {\n  no. servers = %zu\n", dfc_config->n_servers);
+  fprintf(stderr, "  DFCConfig {\n  no. servers = %zu\n",
+          dfc_config->n_servers);
   for (size_t i = 0; i < dfc_config->n_servers; ++i) {
     fprintf(stderr, "    server %zu: %s\n", i, dfc_config->servers[i]);
   }

@@ -76,14 +76,14 @@ void get_chunk_sizes(size_t file_size, size_t n_chunks, size_t *out) {
 }
 
 void merge(char *p1, size_t len_p1, char *p2, size_t len_p2, char *out) {
-// #ifdef DEBUG
-//   fputs("=== MERGE BEGIN ===\n", stderr);
-//   fwrite(p1, sizeof(*p1), len_p1, stderr);
-//   fputs("\n----------\n", stderr);
-//   fwrite(p2, sizeof(*p2), len_p2, stderr);
-//   fputs("=== MERGE END ===\n", stderr);
-//   fflush(stderr);
-// #endif
+  // #ifdef DEBUG
+  //   fputs("=== MERGE BEGIN ===\n", stderr);
+  //   fwrite(p1, sizeof(*p1), len_p1, stderr);
+  //   fputs("\n----------\n", stderr);
+  //   fwrite(p2, sizeof(*p2), len_p2, stderr);
+  //   fputs("=== MERGE END ===\n", stderr);
+  //   fflush(stderr);
+  // #endif
   memcpy(out, p1, len_p1);
   memcpy(out + len_p1, p2, len_p2);
 }
@@ -99,7 +99,8 @@ DFCConfig *read_config() {
     exit(EXIT_FAILURE);
   }
 
-  if ((dfc_config->servers = (char **)malloc(sizeof(char *) * MAX_SERVERS)) == NULL) {
+  if ((dfc_config->servers = (char **)malloc(sizeof(char *) * MAX_SERVERS)) ==
+      NULL) {
     fprintf(stderr, "[ERORR] out of memory\n");
 
     exit(EXIT_FAILURE);
