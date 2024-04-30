@@ -27,10 +27,12 @@ typedef struct {
 
 #define N_CMD_SUPP sizeof(dfc_cmds) / sizeof(dfc_cmds[0])
 
+int run_handler(char **, unsigned int, size_t);
+void usage(const char *);
+
 // debug functions
 void print_cmd(DFCCommand dfc_cmd);
 void print_cmds(void);
-void usage(const char *);
 void print_config(DFCConfig *);
 void print_op(DFCOperation *);
 
