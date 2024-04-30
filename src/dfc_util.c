@@ -46,6 +46,7 @@ void get_chunk_sizes(size_t file_size, size_t n_chunks, size_t *out) {
 
   if (file_size == 0 || n_chunks == 0 || n_chunks > file_size) {
     fprintf(stderr, "[ERROR] cannot partition file.. exiting\n");
+    fprintf(stderr, "[INFO] fsize=%zu, n_chunks=%zu\n", file_size, n_chunks);
 
     exit(EXIT_FAILURE);
   }
@@ -72,6 +73,75 @@ void get_chunk_sizes(size_t file_size, size_t n_chunks, size_t *out) {
   }
 
   out[chunk] = file_size - sum;
+}
+
+void merge(char *p1, size_t len_p1, char *p2, size_t len_p2, char *out) {
+// #ifdef DEBUG
+//   fputs("=== MERGE BEGIN ===\n", stderr);
+//   fwrite(p1, sizeof(*p1), len_p1, stderr);
+//   fputs("\n----------\n", stderr);
+//   fwrite(p2, sizeof(*p2), len_p2, stderr);
+//   fputs("=== MERGE END ===\n", stderr);
+//   fflush(stderr);
+// #endif
+  memcpy(out, p1, len_p1);
+  memcpy(out + len_p1, p2, len_p2);
+}
+
+DFCConfig *read_config() {
+  char line[CONF_MAXLINE + 1];
+  FILE *fp;
+  size_t n_cols, addr_offset, n_servers;
+  DFCConfig *dfc_config;
+
+  if ((dfc_config = (DFCConfig *)malloc(sizeof(DFCConfig))) == NULL) {
+    fprintf(stderr, "[FATAL] out of memory\n");
+    exit(EXIT_FAILURE);
+  }
+
+  if ((dfc_config->servers = (char **)malloc(sizeof(char *) * MAX_SERVERS)) == NULL) {
+    fprintf(stderr, "[ERORR] out of memory\n");
+
+    exit(EXIT_FAILURE);
+  }
+
+  for (size_t i = 0; i < MAX_SERVERS; ++i) {
+    if ((dfc_config->servers[i] = (char *)alloc_buf(CONF_MAXLINE)) == NULL) {
+      fprintf(stderr, "[ERROR] out of memory\n");
+
+      exit(EXIT_FAILURE);
+    }
+  }
+
+  if ((fp = fopen(DFC_CONF, "r")) == NULL) {
+    fprintf(stderr, "[ERROR] unable to open %s\n", DFC_CONF);
+
+    return NULL;
+  }
+
+  n_servers = 0;
+  n_cols = 0;
+  addr_offset = 0;
+
+  while (fgets(line, CONF_MAXLINE, fp) != NULL) {
+    line[strlen(line) - 1] = '\0';
+    while (n_cols < 2) {
+      if (line[addr_offset] == ' ') {
+        n_cols++;
+      }
+
+      addr_offset++;
+    }
+
+    strncpy(dfc_config->servers[n_servers], line + addr_offset, CONF_MAXLINE);
+    n_servers++;
+  }
+
+  fclose(fp);
+
+  dfc_config->n_servers = n_servers;
+
+  return dfc_config;
 }
 
 char *read_file(const char *fpath, size_t *nb_read) {

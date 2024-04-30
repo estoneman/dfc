@@ -23,9 +23,9 @@ int connection_sockfd(const char *hostname, const char *port) {
   hints.ai_family = AF_UNSPEC;
   hints.ai_socktype = SOCK_STREAM;
 
-#ifdef DEBUG
-  fprintf(stderr, "[%s] connecting to %s:%s\n", __func__, hostname, port);
-#endif
+// #ifdef DEBUG
+//   fprintf(stderr, "[%s] connecting to %s:%s\n", __func__, hostname, port);
+// #endif
   if ((addrinfo_status = getaddrinfo(hostname, port, &hints, &srv_entries)) <
       0) {
     fprintf(stderr, "[ERROR] getaddrinfo: %s\n", gai_strerror(addrinfo_status));

@@ -1,6 +1,8 @@
 #ifndef DFC_H_
 #define DFC_H_
 
+#include <limits.h>
+
 #define CONF_MAXLINE 1024
 #define DFC_CONF "./dfc.conf"
 #define MAX_SERVERS 10
@@ -19,7 +21,7 @@ typedef struct {
 } DFCConfig;
 
 typedef struct {
-  char *filename;
+  char filename[PATH_MAX + 1];
   DFCConfig *dfc_config;
 } DFCOperation;
 
@@ -29,6 +31,7 @@ typedef struct {
 void print_cmd(DFCCommand dfc_cmd);
 void print_cmds(void);
 void usage(const char *);
-void dfc_print_config(DFCConfig *);
+void print_config(DFCConfig *);
+void print_op(DFCOperation *);
 
 #endif  // DFC_H_

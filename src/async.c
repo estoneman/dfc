@@ -10,39 +10,37 @@
 #include "dfc/socket_util.h"
 #include "dfc/async.h"
 
-// static pthread_mutex_t net_io_mutex = PTHREAD_MUTEX_INITIALIZER;
-static pthread_rwlock_t dfc_sb_rwlock = PTHREAD_RWLOCK_INITIALIZER;
-static pthread_rwlock_t conf_rwlock = PTHREAD_RWLOCK_INITIALIZER;
+static pthread_rwlock_t skb_lock = PTHREAD_RWLOCK_INITIALIZER;
 
 void *async_dfc_send(void *arg) {
-  DFCBuffer *dfc_buffer = (DFCBuffer *)arg;
+  SocketBuffer *sk_buf;
   ssize_t bytes_sent;
 
-  pthread_rwlock_rdlock(&dfc_sb_rwlock);
+  pthread_rwlock_rdlock(&skb_lock);
 
-  for (size_t i = 0; i < dfc_buffer->n_sbs; ++i) {
-    if ((bytes_sent = dfc_send(
-             dfc_buffer->sbs[i].sockfd, dfc_buffer->sbs[i].data,
-             dfc_buffer->sbs[i].len_data)) != dfc_buffer->sbs[i].len_data) {
-      fprintf(stderr, "[ERROR] incomplete send: wanted=%zd, sent=%zd\n",
-              dfc_buffer->sbs[i].len_data, bytes_sent);
-    }
+  sk_buf = (SocketBuffer *)arg;
 
-#ifdef DEBUG
-    fprintf(stderr, "[%s] sent %zd bytes\n", __func__, bytes_sent);
-    fflush(stderr);
-#endif
+  // send data
+  if ((bytes_sent = dfc_send(sk_buf->sockfd, sk_buf->data, sk_buf->len_data)) != sk_buf->len_data) {
+    fprintf(stderr, "[ERROR] incomplete send\n");
   }
-
-  pthread_rwlock_unlock(&dfc_sb_rwlock);
+  
+  pthread_rwlock_unlock(&skb_lock);
 
   return NULL;
 }
 
 void *handle_get(void *arg) {
-  char *filename = *(char **)arg;
+  DFCOperation *dfc_op = (DFCOperation *)arg;
 
-  fprintf(stderr, "[INFO] put thread got %s\n", filename);
+  fprintf(stderr, "[INFO] put thread got %s\n", dfc_op->filename);
+
+  return NULL;
+}
+
+void *handle_list(void *arg) {
+  (void)arg;
+  fputs("[INFO] list thread\n", stderr);
 
   return NULL;
 }
@@ -50,14 +48,10 @@ void *handle_get(void *arg) {
 void *handle_put(void *arg) {
   DFCOperation *dfc_op = (DFCOperation *)arg;
 
-  char *file_contents;
-  char **chunks;
-  size_t *chunk_sizes, len_file, n;
-  unsigned short fname_hash, start_index;
-  int sockfd;
-
-  pthread_rwlock_rdlock(&conf_rwlock);
-  fprintf(stderr, "[%s] acquired rdlock on 'conf lock'\n", __func__);
+  char *file_contents, **file_pieces, *pair;
+  size_t len_file, n_servers;
+  int split;
+  unsigned int srv_alloc_idx;
 
   // read input file
   if ((file_contents = read_file(dfc_op->filename, &len_file)) == NULL) {
@@ -66,60 +60,47 @@ void *handle_put(void *arg) {
     return NULL;
   }
 
-  n = dfc_op->dfc_config->n_servers;
-  chunk_sizes = malloc(sizeof(size_t) * n);
-  if (chk_alloc_err(chunk_sizes, "malloc", __func__, __LINE__ - 1) == -1) {
-    fprintf(stderr, "[ERROR] out of memory\n");
-    free(file_contents);
+  n_servers = dfc_op->dfc_config->n_servers;
+  size_t chunk_sizes[n_servers];
+  // given n_servers, split file into `n_servers` pieces
+  get_chunk_sizes(len_file, n_servers, chunk_sizes);
+  file_pieces = split_file(file_contents, chunk_sizes, n_servers);
 
+  // given n_servers, calculate number of pairs to generate
+  split = n_servers == 1 ? 0 : 1;
+
+  srv_alloc_idx = hash_fnv1a(dfc_op->filename) % n_servers;
+  fprintf(stderr, "start allocation index = %d\n", srv_alloc_idx);
+
+  if ((pair = alloc_buf(chunk_sizes[n_servers - 1] * 2)) == NULL) {
+    fprintf(stderr, "[FATAL] out of memory\n");
     exit(EXIT_FAILURE);
   }
 
-  // split file
-  get_chunk_sizes(len_file, n, chunk_sizes);
-  if ((chunks = split_file(file_contents, chunk_sizes, n)) == NULL) {
-    fprintf(stderr, "[ERROR] unable to chunkify %s\n", dfc_op->filename);
-    free(file_contents);
-
-    exit(EXIT_FAILURE);
-  }
-
-  // get hash of filename
-  fname_hash = hash_djb2(dfc_op->filename);
-  start_index = fname_hash % n;
-
-  pthread_t send_threads[n];
-  DFCBuffer dfc_buffer;
+  unsigned int j;
+  int sockfd;
   char hostname[DFC_SERVER_NAME_MAX + 1], port[MAX_PORT_DIGITS + 1];
   ssize_t port_offset;
+  pthread_t send_threads[n_servers];
+  int ran_threads[n_servers];
+  SocketBuffer sk_buf[n_servers];
+  DFCHeader dfc_hdr;
+  size_t len_pair;
 
-  if ((dfc_buffer.sbs =
-           (SocketBuffer *)malloc(sizeof(SocketBuffer) * (n / 2))) == NULL) {
-    fprintf(stderr, "[FATAL] out of memory\n");
+  for (size_t i = 0; i < n_servers; ++i) {
+    j = (srv_alloc_idx + i) % n_servers; 
 
-    exit(EXIT_FAILURE);
-  }
-  dfc_buffer.n_sbs = n / 2;
-
-  // given the last chunk size will always be greater than the rest, can
-  // allocate here as opposed to in the loop
-  for (size_t i = 0; i < dfc_buffer.n_sbs; ++i) {
-    if ((dfc_buffer.sbs[i].data = alloc_buf(chunk_sizes[n - 1])) == NULL) {
+    if ((sk_buf[j].dfc_hdr = (DFCHeader *)malloc(sizeof(DFCHeader))) == NULL) {
       fprintf(stderr, "[FATAL] out of memory\n");
-
       exit(EXIT_FAILURE);
     }
-  }
-
-  for (size_t i = 0, j; i < n; ++i) {
-    j = (start_index + i) % n;
-
+    
     // get hostname
     port_offset = 0;
     if ((port_offset =
              read_until(dfc_op->dfc_config->servers[j], DFC_SERVER_NAME_MAX,
                         ':', hostname, DFC_SERVER_NAME_MAX)) == -1) {
-      fprintf(stderr, "[%s] error in configuration for server %zu.. exiting\n",
+      fprintf(stderr, "[%s] error in configuration for server %d.. exiting\n",
               __func__, j);
 
       exit(EXIT_FAILURE);
@@ -128,116 +109,98 @@ void *handle_put(void *arg) {
     // get port
     if (read_until(dfc_op->dfc_config->servers[j] + port_offset,
                    MAX_PORT_DIGITS, '\0', port, MAX_PORT_DIGITS) == -1) {
-      fprintf(stderr, "[%s] error in configuration for server  %zu.. exiting\n",
+      fprintf(stderr, "[%s] error in configuration for server  %d.. exiting\n",
               __func__, j);
 
       exit(EXIT_FAILURE);
     }
+    
+    if (split) {
+      merge(file_pieces[j], chunk_sizes[j],
+            file_pieces[(j + 1) % n_servers], chunk_sizes[(j + 1) % n_servers], pair);
+      len_pair = chunk_sizes[j] + chunk_sizes[(j + 1) % n_servers];
+    } else {
+      memcpy(pair, file_pieces[j], chunk_sizes[j]);
+      len_pair = chunk_sizes[j];
+    }
 
-    // connect to dfs server
+    // connect to server `j`
     if ((sockfd = connection_sockfd(hostname, port)) == -1) {
-      fprintf(stderr,
-              "[%s] server %zu (%s:%s) is not responding, trying next..\n",
-              __func__, j + 1, hostname, port);
-      send_threads[i] = -1;
+      fprintf(stderr, "[%s] could not connect to server %s:%s\n", __func__, hostname, port);
 
       continue;
     }
 
-    pthread_rwlock_wrlock(&dfc_sb_rwlock);
-    for (size_t k = 0; k < n / 2; ++k) {
-      dfc_buffer.sbs[k].sockfd = sockfd;
-      memcpy(dfc_buffer.sbs[k].data, chunks[(i + k) % n],
-             chunk_sizes[(i + k) % n]);
-      dfc_buffer.sbs[k].len_data = chunk_sizes[(i + k) % n];
-#ifdef DEBUG
-      // print_socket_buffer(&dfc_buffer.sbs[k]);
-#endif
-    }
-    pthread_rwlock_unlock(&dfc_sb_rwlock);
+    pthread_rwlock_wrlock(&skb_lock);
+    sk_buf[j].sockfd = sockfd;
 
-#ifdef DEBUG
-    fprintf(stderr,
-            "[%s] sending pieces %zu(size=%zu) and %zu(size=%zu) to server %zu "
-            "(%s:%s)\n",
-            __func__, i, chunk_sizes[i], (i + 1) % n, chunk_sizes[(i + 1) % n],
-            j + 1, hostname, port);
-#endif
-    if (pthread_create(&send_threads[i], NULL, async_dfc_send, &dfc_buffer) <
-        0) {
-      fprintf(stderr, "[ERROR] could not create thread: %s:%d\n", __func__,
-              __LINE__ - 1);
+    strncpy(sk_buf[j].dfc_hdr->cmd, "put", sizeof(dfc_hdr.cmd));
+    sk_buf[j].dfc_hdr->filename = dfc_op->filename;
+    sk_buf[j].dfc_hdr->offset = chunk_sizes[j];
 
-      return NULL;
+    ssize_t total_len;
+    size_t hdr_len;
+
+    // copy header
+    hdr_len = sizeof(sk_buf[j].dfc_hdr->cmd) + strlen(sk_buf[j].dfc_hdr->filename) + sizeof(sk_buf[j].dfc_hdr->offset);
+    if ((sk_buf[j].data = alloc_buf(len_pair + hdr_len)) == NULL) {
+      fprintf(stderr, "[FATAL] out of memory\n");
+      exit(EXIT_FAILURE);
     }
+
+    memcpy(sk_buf[j].data, sk_buf[j].dfc_hdr->cmd, sizeof(sk_buf[j].dfc_hdr->cmd));
+    memcpy(sk_buf[j].data + sizeof(sk_buf[j].dfc_hdr->cmd), sk_buf[j].dfc_hdr->filename, strlen(sk_buf[j].dfc_hdr->filename));
+    memcpy(sk_buf[j].data + sizeof(sk_buf[j].dfc_hdr->cmd) + strlen(sk_buf[j].dfc_hdr->filename), &sk_buf[j].dfc_hdr->offset, sizeof(sk_buf[j].dfc_hdr->offset));
+
+    // copy data
+    memcpy(sk_buf[j].data + hdr_len, pair, len_pair);
+    total_len = hdr_len + len_pair;
+
+    sk_buf[j].len_data = total_len;
+    pthread_rwlock_unlock(&skb_lock);
+
+    // send `dfc_hdr` + `pair` to server `j`
+#ifdef DEBUG
+    fprintf(stderr, "[%s] sending pieces %d and %zu to %s:%s\n", __func__, j,
+            (j + 1) % n_servers, hostname, port);
+#endif
+    if (pthread_create(&send_threads[j], NULL, async_dfc_send, &sk_buf[j]) == -1) {
+      fprintf(stderr, "[%s] could not create thread %zu\n", __func__, i);
+      exit(EXIT_FAILURE);
+    }
+
+    ran_threads[j] = 1;
   }
 
-  pthread_rwlock_unlock(&conf_rwlock);
-  fprintf(stderr, "[%s] released rdlock on 'conf lock'\n", __func__);
-
-  // free resources
-  for (size_t i = 0; i < n; ++i) {
-    if (send_threads[i] != (long unsigned int)-1)
+  for (size_t i = 0; i < n_servers; ++i) {
+    if (ran_threads[i] == 1) {
       pthread_join(send_threads[i], NULL);
-    free(chunks[i]);
-  }
-  free(chunks);
 
-  for (size_t i = 0; i < n / 2; ++i) {
-    free(dfc_buffer.sbs[i].data);
-  }
-  free(dfc_buffer.sbs);
+      if (close(sk_buf[i].sockfd) == -1) {
+        perror("close");
+      }
+    }
 
-  free(chunk_sizes);
-  free(file_contents);
+    free(sk_buf[i].dfc_hdr);
+  }
+
+  free(pair);
 
   return NULL;
+}
+
+void print_header(DFCHeader *dfc_hdr) {
+  fputs("DFCHeader {\n", stderr); 
+  fprintf(stderr, "  cmd: %s\n", dfc_hdr->cmd);
+  fprintf(stderr, "  filename: %s\n", dfc_hdr->filename);
+  fprintf(stderr, "  offset: %zu\n", dfc_hdr->offset);
+  fputs("}\n", stderr);
 }
 
 void print_socket_buffer(SocketBuffer *sb) {
   fputs("SocketBuffer {\n", stderr);
   fprintf(stderr, "  sockfd = %d\n===\n", sb->sockfd);
-  fwrite(sb->data, sizeof(*sb->data), sb->len_data, stderr);
+  fwrite(sb->data + sizeof(DFCHeader), sizeof(*sb->data), sb->len_data, stderr);
   fprintf(stderr, "\n===\n  len = %zu\n", sb->len_data);
   fputs("}\n", stderr);
-}
-
-void *read_config(void *arg) {
-  DFCConfig *dfc_config = (DFCConfig *)arg;
-
-  char line[CONF_MAXLINE + 1];
-  FILE *fp;
-  size_t n_cols, addr_offset, n_servers;
-
-  pthread_rwlock_wrlock(&conf_rwlock);
-  fprintf(stderr, "[%s] acquired wrlock on 'conf_rwlock'\n", __func__);
-  if ((fp = fopen(DFC_CONF, "r")) == NULL) {
-    fprintf(stderr, "[ERROR] unable to open %s\n", DFC_CONF);
-
-    return NULL;
-  }
-
-  n_servers = 0;
-  n_cols = 0;
-  addr_offset = 0;
-
-  while (fgets(line, CONF_MAXLINE, fp) != NULL) {
-    line[strlen(line) - 1] = '\0';
-    while (n_cols < 2) {
-      if (line[addr_offset] == ' ') {
-        n_cols++;
-      }
-
-      addr_offset++;
-    }
-
-    strncpy(dfc_config->servers[n_servers], line + addr_offset, CONF_MAXLINE);
-    n_servers++;
-  }
-
-  dfc_config->n_servers = n_servers;
-  pthread_rwlock_unlock(&conf_rwlock);
-  fprintf(stderr, "[%s] released wrlock held by 'conf lock'\n", __func__);
-
-  return NULL;
 }
