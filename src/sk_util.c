@@ -13,7 +13,17 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-#include "dfc/socket_util.h"
+#include "dfc/sk_util.h"
+
+int adjacent_failure(int *sockfds, size_t len) {
+  for (size_t i = 0; i < len; ++i) {
+    if (sockfds[i] == -1 && sockfds[(i + 1) % len] == -1) {
+      return 1;
+    }
+  }
+
+  return 0;
+}
 
 int connection_sockfd(const char *hostname, const char *port) {
   struct addrinfo hints, *srv_entries, *srv_entry;
@@ -23,9 +33,6 @@ int connection_sockfd(const char *hostname, const char *port) {
   hints.ai_family = AF_UNSPEC;
   hints.ai_socktype = SOCK_STREAM;
 
-  // #ifdef DEBUG
-  //   fprintf(stderr, "[%s] connecting to %s:%s\n", __func__, hostname, port);
-  // #endif
   if ((addrinfo_status = getaddrinfo(hostname, port, &hints, &srv_entries)) <
       0) {
     fprintf(stderr, "[ERROR] getaddrinfo: %s\n", gai_strerror(addrinfo_status));
@@ -43,23 +50,17 @@ int connection_sockfd(const char *hostname, const char *port) {
       continue;
     }
 
-    /*
-     * EINPROGRESS
-         The socket is nonblocking and the connection cannot be completed
-       immediately. (UNIX domain sockets failed with EAGAIN instead.) It is
-       possible to select(2) or poll(2) for completion by selecting the socket
-       for writing. After select(2) indicates writability, use getsockopt(2) to
-       read the SO_ERROR option at level SOL_SOCKET to determine whether
-       connect() completed successfully (SO_ERROR is zero) or unsuccessfully
-       (SO_ERROR  is one of the usual error codes listed here, explaining the
-       reason for the failure).
-     */
-    if (connect(sockfd, srv_entry->ai_addr, srv_entry->ai_addrlen) < 0) {
-      close(sockfd);
-      continue;
+    fcntl(sockfd, F_SETFL, O_NONBLOCK);
+
+    if (connect(sockfd, srv_entry->ai_addr, srv_entry->ai_addrlen) == -1) {
+      if (errno != EINPROGRESS) {
+        perror("connect");
+        close(sockfd);
+        continue;
+      }
     }
 
-    break;  // successfully created socket and connected to remote service
+    break;
   }
 
   if (srv_entry == NULL) {
@@ -81,4 +82,17 @@ ssize_t dfc_send(int sockfd, char *send_buf, size_t len_send_buf) {
   }
 
   return nb_sent;
+}
+
+void set_timeout(int sockfd, long tv_sec, long tv_usec) {
+  struct timeval rcvtimeo;
+
+  rcvtimeo.tv_sec = tv_sec;
+  rcvtimeo.tv_usec = tv_usec;
+  if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &rcvtimeo, sizeof(rcvtimeo)) <
+      0) {
+    perror("setsockopt");
+    close(sockfd);
+    exit(EXIT_FAILURE);
+  }
 }

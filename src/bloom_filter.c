@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include "dfc/types.h"
 #include "dfc/dfc_util.h"
 #include "dfc/bloom_filter.h"
 

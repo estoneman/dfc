@@ -17,6 +17,27 @@ char *alloc_buf(size_t size) {
   return buf;
 }
 
+size_t attach_hdr(char *buf, const char *cmd, char *fname, size_t offset) {
+  DFCHeader dfc_hdr;
+  size_t len_hdr;
+
+  strncpy(dfc_hdr.cmd, cmd, sizeof(dfc_hdr.cmd));
+  len_hdr = sizeof(dfc_hdr.cmd);
+
+  strncpy(dfc_hdr.fname, fname, PATH_MAX);
+  fprintf(stderr, "[INFO] fname = %s\n", dfc_hdr.fname);
+  len_hdr += strlen(dfc_hdr.fname);
+
+  dfc_hdr.offset = offset;
+  len_hdr += sizeof(offset);
+
+  print_header(&dfc_hdr);
+
+  memcpy(buf, &dfc_hdr, sizeof(DFCHeader));
+
+  return len_hdr;
+}
+
 int chk_alloc_err(void *mem, const char *allocator, const char *func,
                   int line) {
   if (mem == NULL) {
@@ -76,30 +97,22 @@ void get_chunk_sizes(size_t file_size, size_t n_chunks, size_t *out) {
 }
 
 void merge(char *p1, size_t len_p1, char *p2, size_t len_p2, char *out) {
-  // #ifdef DEBUG
-  //   fputs("=== MERGE BEGIN ===\n", stderr);
-  //   fwrite(p1, sizeof(*p1), len_p1, stderr);
-  //   fputs("\n----------\n", stderr);
-  //   fwrite(p2, sizeof(*p2), len_p2, stderr);
-  //   fputs("=== MERGE END ===\n", stderr);
-  //   fflush(stderr);
-  // #endif
   memcpy(out, p1, len_p1);
   memcpy(out + len_p1, p2, len_p2);
 }
 
-DFCConfig *read_config() {
+DFCOperation *read_config() {
   char line[CONF_MAXLINE + 1];
   FILE *fp;
   size_t n_cols, addr_offset, n_servers;
-  DFCConfig *dfc_config;
+  DFCOperation *dfc_op;
 
-  if ((dfc_config = (DFCConfig *)malloc(sizeof(DFCConfig))) == NULL) {
+  if ((dfc_op = (DFCOperation *)malloc(sizeof(DFCOperation))) == NULL) {
     fprintf(stderr, "[FATAL] out of memory\n");
     exit(EXIT_FAILURE);
   }
 
-  if ((dfc_config->servers = (char **)malloc(sizeof(char *) * MAX_SERVERS)) ==
+  if ((dfc_op->servers = (char **)malloc(sizeof(char *) * MAX_SERVERS)) ==
       NULL) {
     fprintf(stderr, "[ERORR] out of memory\n");
 
@@ -107,7 +120,7 @@ DFCConfig *read_config() {
   }
 
   for (size_t i = 0; i < MAX_SERVERS; ++i) {
-    if ((dfc_config->servers[i] = (char *)alloc_buf(CONF_MAXLINE)) == NULL) {
+    if ((dfc_op->servers[i] = (char *)alloc_buf(CONF_MAXLINE)) == NULL) {
       fprintf(stderr, "[ERROR] out of memory\n");
 
       exit(EXIT_FAILURE);
@@ -134,15 +147,26 @@ DFCConfig *read_config() {
       addr_offset++;
     }
 
-    strncpy(dfc_config->servers[n_servers], line + addr_offset, CONF_MAXLINE);
+    strncpy(dfc_op->servers[n_servers], line + addr_offset, CONF_MAXLINE);
     n_servers++;
+  }
+
+  if (n_servers == 0) {
+    for (size_t i = 0; i < MAX_SERVERS; ++i) {
+      free(dfc_op->servers[i]);
+    }
+
+    free(dfc_op->servers);
+    fclose(fp);
+
+    return NULL;
   }
 
   fclose(fp);
 
-  dfc_config->n_servers = n_servers;
+  dfc_op->n_servers = n_servers;
 
-  return dfc_config;
+  return dfc_op;
 }
 
 char *read_file(const char *fpath, size_t *nb_read) {
@@ -213,17 +237,14 @@ char **split_file(char *file_contents, size_t *chunk_sizes, size_t n_chunks) {
     return NULL;
   }
 
+  offset = 0;
   for (size_t i = 0; i < n_chunks; ++i) {
-    chunks[i] = NULL;
     if ((chunks[i] = alloc_buf(chunk_sizes[i])) == NULL) {
       fprintf(stderr, "[ERROR] out of memory\n");
 
       return NULL;
     }
-  }
 
-  offset = 0;
-  for (size_t i = 0; i < n_chunks; ++i) {
     memcpy(chunks[i], file_contents + offset, chunk_sizes[i]);
 
     offset += chunk_sizes[i];
@@ -231,3 +252,12 @@ char **split_file(char *file_contents, size_t *chunk_sizes, size_t n_chunks) {
 
   return chunks;
 }
+
+void print_header(DFCHeader *dfc_hdr) {
+  fputs("DFCHeader {\n", stderr);
+  fprintf(stderr, "  cmd: %s\n", dfc_hdr->cmd);
+  fprintf(stderr, "  filename: %s\n", dfc_hdr->fname);
+  fprintf(stderr, "  offset: %zu\n", dfc_hdr->offset);
+  fputs("}\n", stderr);
+}
+
