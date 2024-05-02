@@ -254,4 +254,3 @@ void print_header(DFCHeader *dfc_hdr) {
   fprintf(stderr, "  offset: %zu\n", dfc_hdr->offset);
   fputs("}\n", stderr);
 }
-

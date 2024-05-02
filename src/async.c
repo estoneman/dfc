@@ -4,8 +4,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/types.h>
 #include <unistd.h>
 
 #include "dfc/types.h"
@@ -23,12 +23,14 @@ void *async_dfc_send(void *arg) {
   pthread_mutex_lock(&sk_buf->mutex);
 
   // send data
-  if ((bytes_sent = dfc_send(sk_buf->sockfd, sk_buf->data, sk_buf->len_data)) != sk_buf->len_data) {
+  if ((bytes_sent = dfc_send(sk_buf->sockfd, sk_buf->data, sk_buf->len_data)) !=
+      sk_buf->len_data) {
     fprintf(stderr, "[ERROR] incomplete send\n");
   }
 
 #ifdef DEBUG
-  fprintf(stderr, "[INFO] sent %zd bytes over socket %d (expected=%zd)\n", bytes_sent, sk_buf->sockfd, sk_buf->len_data);
+  fprintf(stderr, "[INFO] sent %zd bytes over socket %d (expected=%zd)\n",
+          bytes_sent, sk_buf->sockfd, sk_buf->len_data);
   fflush(stderr);
 #endif
 
@@ -62,9 +64,8 @@ void fill_sk_set(DFCOperation *dfc_op, int *sockfds) {
   for (size_t i = 0; i < dfc_op->n_servers; ++i) {
     // extract hostname
     port_offset = 0;
-    if ((port_offset =
-             read_until(dfc_op->servers[i], DFC_SERVER_NAME_MAX,
-                        ':', hostname, DFC_SERVER_NAME_MAX)) == -1) {
+    if ((port_offset = read_until(dfc_op->servers[i], DFC_SERVER_NAME_MAX, ':',
+                                  hostname, DFC_SERVER_NAME_MAX)) == -1) {
       fprintf(stderr, "[%s] error in configuration for server %zu.. exiting\n",
               __func__, i);
 
@@ -72,8 +73,8 @@ void fill_sk_set(DFCOperation *dfc_op, int *sockfds) {
     }
 
     // extract port
-    if (read_until(dfc_op->servers[i] + port_offset,
-                   MAX_PORT_DIGITS, '\0', port, MAX_PORT_DIGITS) == -1) {
+    if (read_until(dfc_op->servers[i] + port_offset, MAX_PORT_DIGITS, '\0',
+                   port, MAX_PORT_DIGITS) == -1) {
       fprintf(stderr, "[%s] error in configuration for server %zu.. exiting\n",
               __func__, i);
 
@@ -82,7 +83,9 @@ void fill_sk_set(DFCOperation *dfc_op, int *sockfds) {
 
     if ((sockfds[i] = connection_sockfd(hostname, port)) == -1) {
       perror("connect");
-      fprintf(stderr, "[ERROR] connection attempt to server %zu(%s:%s) failed\n", i, hostname, port);
+      fprintf(stderr,
+              "[ERROR] connection attempt to server %zu(%s:%s) failed\n", i,
+              hostname, port);
       continue;
     }
   }
@@ -95,7 +98,8 @@ void fill_sk_set(DFCOperation *dfc_op, int *sockfds) {
   timeout.tv_usec = CONNECTTIMEO_USEC;
 
   for (size_t i = 0; i < dfc_op->n_servers; ++i) {
-    if ((sel_res = select(sockfds[dfc_op->n_servers - 1] + 1, NULL, &writefds, NULL, &timeout)) > 1) {
+    if ((sel_res = select(sockfds[dfc_op->n_servers - 1] + 1, NULL, &writefds,
+                          NULL, &timeout)) > 1) {
       int so_error;
       socklen_t len = sizeof(so_error);
 
@@ -108,12 +112,14 @@ void fill_sk_set(DFCOperation *dfc_op, int *sockfds) {
         flags &= ~O_NONBLOCK;
         fcntl(sockfds[i], F_SETFL, flags);
 #ifdef DEBUG
-        fprintf(stderr, "[INFO] %s(sfd=%d) is open\n", dfc_op->servers[i], sockfds[i]);
+        fprintf(stderr, "[INFO] %s(sfd=%d) is open\n", dfc_op->servers[i],
+                sockfds[i]);
         fflush(stderr);
 #endif
       } else if (so_error == ECONNREFUSED) {
 #ifdef DEBUG
-        fprintf(stderr, "[ERROR] (%s) %s\n", dfc_op->servers[i], strerror(so_error));
+        fprintf(stderr, "[ERROR] (%s) %s\n", dfc_op->servers[i],
+                strerror(so_error));
         fflush(stderr);
 #endif
         sockfds[i] = -1;
@@ -162,7 +168,8 @@ void *handle_put(void *arg) {
 
     // read file
     if ((file_content = read_file(dfc_op->files[i], &len_file)) == NULL) {
-      fprintf(stderr, "[ERROR] failed to read %s: %s\n", dfc_op->files[i], strerror(errno));
+      fprintf(stderr, "[ERROR] failed to read %s: %s\n", dfc_op->files[i],
+              strerror(errno));
       break;
     }
 
@@ -178,13 +185,15 @@ void *handle_put(void *arg) {
 
     for (size_t j = 0; j < dfc_op->n_servers; ++j) {
       srv_id = (srv_alloc_start + j) % dfc_op->n_servers;
-      fprintf(stderr, "[INFO] selected server %zu(%s)\n", srv_id, dfc_op->servers[srv_id]);
+      fprintf(stderr, "[INFO] selected server %zu(%s)\n", srv_id,
+              dfc_op->servers[srv_id]);
 
       if (sockfds[srv_id] == -1) {  // acceptable, decided beforehand
         continue;
       }
 
-      if ((sk_buf[srv_id] = (SocketBuffer *)malloc(sizeof(SocketBuffer))) == NULL) {
+      if ((sk_buf[srv_id] = (SocketBuffer *)malloc(sizeof(SocketBuffer))) ==
+          NULL) {
         fprintf(stderr, "[FATAL] out of memory\n");
 
         exit(EXIT_FAILURE);
@@ -193,19 +202,23 @@ void *handle_put(void *arg) {
       pthread_mutex_init(&sk_buf[srv_id]->mutex, NULL);
 
       pthread_mutex_lock(&sk_buf[srv_id]->mutex);
-      merge(file_pieces[srv_id], chunk_sizes[srv_id], file_pieces[(srv_id + 1) % dfc_op->n_servers],
+      merge(file_pieces[srv_id], chunk_sizes[srv_id],
+            file_pieces[(srv_id + 1) % dfc_op->n_servers],
             chunk_sizes[(srv_id + 1) % dfc_op->n_servers], pair);
-      len_pair = chunk_sizes[srv_id] + chunk_sizes[(srv_id + 1) % dfc_op->n_servers];
+      len_pair =
+          chunk_sizes[srv_id] + chunk_sizes[(srv_id + 1) % dfc_op->n_servers];
 
       sk_buf[srv_id]->sockfd = sockfds[srv_id];
 
-      if ((sk_buf[srv_id]->data = alloc_buf(len_pair + sizeof(DFCHeader))) == NULL) {
+      if ((sk_buf[srv_id]->data = alloc_buf(len_pair + sizeof(DFCHeader))) ==
+          NULL) {
         fprintf(stderr, "[FATAL] out of memory\n");
         exit(EXIT_FAILURE);
       }
 
-      len_hdr = attach_hdr(sk_buf[srv_id]->data, "put", dfc_op->files[i],
-                           chunk_sizes[srv_id] + chunk_sizes[(srv_id + 1) % dfc_op->n_servers]);
+      len_hdr = attach_hdr(
+          sk_buf[srv_id]->data, "put", dfc_op->files[i],
+          chunk_sizes[srv_id] + chunk_sizes[(srv_id + 1) % dfc_op->n_servers]);
       memcpy(sk_buf[srv_id]->data + len_hdr, pair, len_pair);
 
       sk_buf[srv_id]->len_data = len_hdr + len_pair;
@@ -216,7 +229,8 @@ void *handle_put(void *arg) {
 
       pthread_mutex_unlock(&sk_buf[srv_id]->mutex);
 
-      if (pthread_create(&send_tids[j], NULL, async_dfc_send, &sk_buf[srv_id])) {
+      if (pthread_create(&send_tids[j], NULL, async_dfc_send,
+                         &sk_buf[srv_id])) {
         fprintf(stderr, "[%s] could not create thread %zu\n", __func__, i);
         exit(EXIT_FAILURE);
       }

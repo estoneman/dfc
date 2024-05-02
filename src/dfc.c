@@ -27,8 +27,7 @@ int run_handler(int argc, char *argv[]) {
   argc -= 1;
   argv += 1;
 
-  if ((dfc_op->files = (char **)malloc(sizeof(char *) * argc)) ==
-      NULL) {
+  if ((dfc_op->files = (char **)malloc(sizeof(char *) * argc)) == NULL) {
     fprintf(stderr, "[ERORR] out of memory\n");
 
     exit(EXIT_FAILURE);
@@ -64,13 +63,13 @@ int run_handler(int argc, char *argv[]) {
   if (cmd_hash == hash_djb2("get")) {
     if (dfc_op->n_files == 0) {
       fprintf(stderr, "[ERROR] Expected files\n");
-      
+
       return EXIT_FAILURE;
     }
   } else if (cmd_hash == hash_djb2("put")) {
     if (dfc_op->n_files == 0) {
       fprintf(stderr, "[ERROR] Expected files\n");
-      
+
       return EXIT_FAILURE;
     }
 
@@ -84,12 +83,12 @@ int run_handler(int argc, char *argv[]) {
 
   pthread_join(handler_tid, NULL);
 
-  for(size_t i = 0; i < MAX_SERVERS; ++i) {
+  for (size_t i = 0; i < MAX_SERVERS; ++i) {
     free(dfc_op->servers[i]);
   }
   free(dfc_op->servers);
 
-  for(size_t i = 0; i < dfc_op->n_files; ++i) {
+  for (size_t i = 0; i < dfc_op->n_files; ++i) {
     free(dfc_op->files[i]);
   }
   free(dfc_op->files);
