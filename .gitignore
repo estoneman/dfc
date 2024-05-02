@@ -1,3 +1,6 @@
 out/
 prototype/
 TODO.md
+test/
+# remove me when done
+dfc.conf
