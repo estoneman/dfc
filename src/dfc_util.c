@@ -18,22 +18,18 @@ char *alloc_buf(size_t size) {
 }
 
 size_t attach_hdr(char *buf, const char *cmd, char *fname, size_t offset) {
-  DFCHeader dfc_hdr;
   size_t len_hdr;
 
-  strncpy(dfc_hdr.cmd, cmd, sizeof(dfc_hdr.cmd));
-  len_hdr = sizeof(dfc_hdr.cmd);
+  strncpy(buf, cmd, strlen(cmd) + 1);
+  len_hdr = strlen(cmd) + 1;
 
-  strncpy(dfc_hdr.fname, fname, PATH_MAX);
-  fprintf(stderr, "[INFO] fname = %s\n", dfc_hdr.fname);
-  len_hdr += strlen(dfc_hdr.fname);
+  strncpy(buf + len_hdr, fname, strlen(fname) + 1);
+  len_hdr += strlen(fname) + 1;
 
-  dfc_hdr.offset = offset;
-  len_hdr += sizeof(offset);
+  memcpy(buf + len_hdr, &offset, sizeof(size_t));
+  len_hdr += sizeof(size_t);
 
-  print_header(&dfc_hdr);
-
-  memcpy(buf, &dfc_hdr, sizeof(DFCHeader));
+  fprintf(stderr, "len_hdr = %zu\n", len_hdr);
 
   return len_hdr;
 }

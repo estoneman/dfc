@@ -197,10 +197,21 @@ void *handle_put(void *arg) {
         fprintf(stderr, "[FATAL] out of memory\n");
         exit(EXIT_FAILURE);
       }
-      len_hdr = attach_hdr(sk_buf[srv_id]->data, "put", dfc_op->files[i], chunk_sizes[srv_id]);
+
+      len_hdr = attach_hdr(sk_buf[srv_id]->data, "put", dfc_op->files[i],
+                           chunk_sizes[srv_id] + chunk_sizes[(srv_id + 1) % dfc_op->n_servers]);
       memcpy(sk_buf[srv_id]->data + len_hdr, pair, len_pair);
 
-      sk_buf[srv_id]->len_data = len_pair;
+      sk_buf[srv_id]->len_data = len_hdr + len_pair;
+
+#ifdef DEBUG
+      fputs("\n^^^\n", stderr);
+      fputs("\n=== piece 1 ===\n", stderr);
+      fwrite(file_pieces[srv_id], sizeof(char), chunk_sizes[srv_id], stderr);
+      fputs("\n=== piece 2 ===\n", stderr);
+      fwrite(file_pieces[(srv_id + 1) % dfc_op->n_servers], sizeof(char), chunk_sizes[(srv_id + 1) % dfc_op->n_servers], stderr);
+      fputs("\n^^^\n", stderr);
+#endif
 
       pthread_mutex_unlock(&sk_buf[srv_id]->mutex);
 
