@@ -1,4 +1,5 @@
 #include <errno.h>
+#include <fcntl.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -27,7 +28,7 @@ void *async_dfc_send(void *arg) {
   }
 
 #ifdef DEBUG
-  fprintf(stderr, "[INFO] sent %zd bytes over socket %d\n", bytes_sent, sk_buf->sockfd);
+  fprintf(stderr, "[INFO] sent %zd bytes over socket %d (expected=%zd)\n", bytes_sent, sk_buf->sockfd, sk_buf->len_data);
   fflush(stderr);
 #endif
 
@@ -101,6 +102,11 @@ void fill_sk_set(DFCOperation *dfc_op, int *sockfds) {
       getsockopt(sockfds[i], SOL_SOCKET, SO_ERROR, &so_error, &len);
 
       if (so_error == 0) {
+        // clear non-blocking flag, if set, leads to incomplete sends/writes
+        // when file is too large for socket buffer
+        int flags = fcntl(sockfds[i], F_GETFL);
+        flags &= ~O_NONBLOCK;
+        fcntl(sockfds[i], F_SETFL, flags);
 #ifdef DEBUG
         fprintf(stderr, "[INFO] %s(sfd=%d) is open\n", dfc_op->servers[i], sockfds[i]);
         fflush(stderr);
@@ -156,7 +162,7 @@ void *handle_put(void *arg) {
 
     // read file
     if ((file_content = read_file(dfc_op->files[i], &len_file)) == NULL) {
-      fprintf(stderr, "[ERROR] failed to read %s\n", dfc_op->files[i]);
+      fprintf(stderr, "[ERROR] failed to read %s: %s\n", dfc_op->files[i], strerror(errno));
       break;
     }
 
@@ -204,43 +210,49 @@ void *handle_put(void *arg) {
 
       sk_buf[srv_id]->len_data = len_hdr + len_pair;
 
-#ifdef DEBUG
-      fputs("\n^^^\n", stderr);
-      fputs("\n=== piece 1 ===\n", stderr);
-      fwrite(file_pieces[srv_id], sizeof(char), chunk_sizes[srv_id], stderr);
-      fputs("\n=== piece 2 ===\n", stderr);
-      fwrite(file_pieces[(srv_id + 1) % dfc_op->n_servers], sizeof(char), chunk_sizes[(srv_id + 1) % dfc_op->n_servers], stderr);
-      fputs("\n^^^\n", stderr);
-#endif
+      fprintf(stderr, "[INFO] sending pieces %zu, %zu of %s to server %s\n",
+              srv_id, (srv_id + 1) % dfc_op->n_servers, dfc_op->files[i],
+              dfc_op->servers[srv_id]);
 
       pthread_mutex_unlock(&sk_buf[srv_id]->mutex);
-
-      fprintf(stderr, "[INFO] sending pieces (%zu, %zu) of %s to server %s(sfd=%d)\n",
-              srv_id, (srv_id + 1) % dfc_op->n_servers, dfc_op->files[i],
-              dfc_op->servers[srv_id], sk_buf[srv_id]->sockfd);
 
       if (pthread_create(&send_tids[j], NULL, async_dfc_send, &sk_buf[srv_id])) {
         fprintf(stderr, "[%s] could not create thread %zu\n", __func__, i);
         exit(EXIT_FAILURE);
       }
 
-      ran_threads[j] = 1;
+      ran_threads[srv_id] = 1;
     }
 
     for (size_t j = 0; j < dfc_op->n_servers; ++j) {
-      if (ran_threads[j] == 1)
+      if (ran_threads[j] == 1) {
         pthread_join(send_tids[j], NULL);
+
+        if (file_pieces[j] != NULL) {
+          free(file_pieces[j]);
+        }
+
+        if (sk_buf[j]->data != NULL) {
+          free(sk_buf[j]->data);
+        }
+
+        if (sk_buf[j] != NULL) {
+          free(sk_buf[j]);
+        }
+      }
     }
 
-    for (size_t j = 0; j < dfc_op->n_servers; ++j) {
-      free(file_pieces[j]);
-      free(sk_buf[j]->data);
-      free(sk_buf[j]);
+    if (file_pieces != NULL) {
+      free(file_pieces);
     }
-    free(file_pieces);
 
-    free(file_content);
-    free(pair);
+    if (file_content != NULL) {
+      free(file_content);
+    }
+
+    if (pair != NULL) {
+      free(pair);
+    }
   }
 
   for (size_t i = 0; i < dfc_op->n_servers; ++i) {

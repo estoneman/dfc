@@ -29,8 +29,6 @@ size_t attach_hdr(char *buf, const char *cmd, char *fname, size_t offset) {
   memcpy(buf + len_hdr, &offset, sizeof(size_t));
   len_hdr += sizeof(size_t);
 
-  fprintf(stderr, "len_hdr = %zu\n", len_hdr);
-
   return len_hdr;
 }
 

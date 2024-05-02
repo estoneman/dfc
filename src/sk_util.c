@@ -78,7 +78,6 @@ ssize_t dfc_send(int sockfd, char *send_buf, size_t len_send_buf) {
 
   if ((nb_sent = send(sockfd, send_buf, len_send_buf, 0)) < 0) {
     perror("send");
-    return -1;
   }
 
   return nb_sent;
