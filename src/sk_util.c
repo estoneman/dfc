@@ -13,6 +13,8 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include "dfc/types.h"
+#include "dfc/dfc_util.h"
 #include "dfc/sk_util.h"
 
 int adjacent_failure(int *sockfds, size_t len) {
@@ -81,6 +83,84 @@ ssize_t dfc_send(int sockfd, char *send_buf, size_t len_send_buf) {
   }
 
   return nb_sent;
+}
+
+void fill_sk_set(DFCOperation *dfc_op, int *sockfds) {
+  char hostname[DFC_SERVER_NAME_MAX + 1], port[MAX_PORT_DIGITS + 1];
+  ssize_t port_offset;
+  fd_set writefds;
+  struct timeval timeout;
+  int sel_res;
+
+  for (size_t i = 0; i < dfc_op->n_servers; ++i) {
+    // extract hostname
+    port_offset = 0;
+    if ((port_offset = read_until(dfc_op->servers[i], DFC_SERVER_NAME_MAX, ':',
+                                  hostname, DFC_SERVER_NAME_MAX)) == -1) {
+      fprintf(stderr, "[%s] error in configuration for server %zu.. exiting\n",
+              __func__, i);
+
+      exit(EXIT_FAILURE);
+    }
+
+    // extract port
+    if (read_until(dfc_op->servers[i] + port_offset, MAX_PORT_DIGITS, '\0',
+                   port, MAX_PORT_DIGITS) == -1) {
+      fprintf(stderr, "[%s] error in configuration for server %zu.. exiting\n",
+              __func__, i);
+
+      exit(EXIT_FAILURE);
+    }
+
+    if ((sockfds[i] = connection_sockfd(hostname, port)) == -1) {
+      perror("connect");
+      fprintf(stderr,
+              "[ERROR] connection attempt to server %zu(%s:%s) failed\n", i,
+              hostname, port);
+      continue;
+    }
+  }
+
+  FD_ZERO(&writefds);
+  for (size_t i = 0; i < dfc_op->n_servers; ++i) {
+    FD_SET(sockfds[i], &writefds);
+  }
+  timeout.tv_sec = CONNECTTIMEO_SEC;
+  timeout.tv_usec = CONNECTTIMEO_USEC;
+
+  for (size_t i = 0; i < dfc_op->n_servers; ++i) {
+    if ((sel_res = select(sockfds[dfc_op->n_servers - 1] + 1, NULL, &writefds,
+                          NULL, &timeout)) > 1) {
+      int so_error;
+      socklen_t len = sizeof(so_error);
+
+      getsockopt(sockfds[i], SOL_SOCKET, SO_ERROR, &so_error, &len);
+
+      if (so_error == 0) {
+        // clear non-blocking flag, if set, leads to incomplete sends/writes
+        // when file is too large for socket buffer
+        int flags = fcntl(sockfds[i], F_GETFL);
+        flags &= ~O_NONBLOCK;
+        fcntl(sockfds[i], F_SETFL, flags);
+#ifdef DEBUG
+        fprintf(stderr, "[INFO] %s(sfd=%d) is open\n", dfc_op->servers[i],
+                sockfds[i]);
+        fflush(stderr);
+#endif
+      } else if (so_error == ECONNREFUSED) {
+#ifdef DEBUG
+        fprintf(stderr, "[ERROR] (%s) %s\n", dfc_op->servers[i],
+                strerror(so_error));
+        fflush(stderr);
+#endif
+        sockfds[i] = -1;
+      } else {
+        perror("connect");
+
+        exit(EXIT_FAILURE);
+      }
+    }
+  }
 }
 
 void set_timeout(int sockfd, long tv_sec, long tv_usec) {
