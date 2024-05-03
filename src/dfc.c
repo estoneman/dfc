@@ -8,6 +8,7 @@
 #include "dfc/bloom_filter.h"
 #include "dfc/dfc_util.h"
 #include "dfc/async.h"
+#include "dfc/sk_util.h"
 #include "dfc/dfc.h"
 
 DFCCommand dfc_cmds[] = {{.cmd = "get", .hash = 0},
@@ -17,7 +18,7 @@ DFCCommand dfc_cmds[] = {{.cmd = "get", .hash = 0},
 int run_handler(int argc, char *argv[]) {
   DFCOperation *dfc_op;
   unsigned int cmd_hash;
-  pthread_t handler_tid;
+  // pthread_t handler_tid;
 
   if ((dfc_op = read_config()) == NULL) {
     return -1;
@@ -60,6 +61,8 @@ int run_handler(int argc, char *argv[]) {
     dfc_op->n_files++;
   }
 
+  int sockfds[dfc_op->n_servers];
+
   if (cmd_hash == hash_djb2("get")) {
     if (dfc_op->n_files == 0) {
       fprintf(stderr, "[ERROR] Expected files\n");
@@ -73,15 +76,24 @@ int run_handler(int argc, char *argv[]) {
       return EXIT_FAILURE;
     }
 
-    if (pthread_create(&handler_tid, NULL, handle_put, &dfc_op) < 0) {
-      fprintf(stderr, "[ERROR] unable to create 'put' thread\n");
-      exit(EXIT_FAILURE);
+    fill_sk_set(dfc_op, sockfds);
+
+    int res;
+    size_t n_servers;
+
+    n_servers = sizeof(sockfds) / sizeof(sockfds[0]);
+    fprintf(stderr, "[INFO] putting %zu files\n", dfc_op->n_files);
+    for (size_t i = 0; i < dfc_op->n_files; ++i) {
+      if ((res = handle_put(dfc_op->files[i], sockfds, n_servers)) == -1) {
+        fprintf(stderr, "[ERROR] put %s failed\n", dfc_op->files[i]);
+      }
     }
+
   } else {  // list
     fprintf(stderr, "[INFO] querying for files\n");
   }
 
-  pthread_join(handler_tid, NULL);
+  // pthread_join(handler_tid, NULL);
 
   for (size_t i = 0; i < MAX_SERVERS; ++i) {
     free(dfc_op->servers[i]);
