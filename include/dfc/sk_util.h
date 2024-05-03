@@ -6,7 +6,8 @@
 
 int adjacent_failure(int *, size_t);
 int connection_sockfd(const char *, const char *);
-void set_timeout(int, long, long);
 ssize_t dfc_send(int, char *, size_t);
+void fill_sk_set(DFCOperation *, int *);
+void set_timeout(int, long, long);
 
 #endif  // SK_UTIL_H_
