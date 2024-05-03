@@ -18,7 +18,7 @@ void *async_dfc_send(void *arg) {
   SocketBuffer *sk_buf;
   ssize_t bytes_sent;
 
-  sk_buf = *(SocketBuffer **)arg;
+  sk_buf = (SocketBuffer *)arg;
 
   pthread_mutex_lock(&sk_buf->mutex);
 
@@ -54,86 +54,124 @@ void *handle_list(void *arg) {
   return NULL;
 }
 
-void fill_sk_set(DFCOperation *dfc_op, int *sockfds) {
-  char hostname[DFC_SERVER_NAME_MAX + 1], port[MAX_PORT_DIGITS + 1];
-  ssize_t port_offset;
-  fd_set writefds;
-  struct timeval timeout;
-  int sel_res;
+int handle_put(char *fname, int *sockfds, size_t n_servers) {
+  unsigned int srv_alloc_start;
+  char *file_content, *pair, **file_pieces;
+  size_t srv_id, len_file, len_pair, len_hdr;
+  size_t chunk_sizes[n_servers];
+  pthread_t send_tids[n_servers];
+  int ran_threads[n_servers];
+  SocketBuffer sk_buf[n_servers];
 
-  for (size_t i = 0; i < dfc_op->n_servers; ++i) {
-    // extract hostname
-    port_offset = 0;
-    if ((port_offset = read_until(dfc_op->servers[i], DFC_SERVER_NAME_MAX, ':',
-                                  hostname, DFC_SERVER_NAME_MAX)) == -1) {
-      fprintf(stderr, "[%s] error in configuration for server %zu.. exiting\n",
-              __func__, i);
-
-      exit(EXIT_FAILURE);
-    }
-
-    // extract port
-    if (read_until(dfc_op->servers[i] + port_offset, MAX_PORT_DIGITS, '\0',
-                   port, MAX_PORT_DIGITS) == -1) {
-      fprintf(stderr, "[%s] error in configuration for server %zu.. exiting\n",
-              __func__, i);
-
-      exit(EXIT_FAILURE);
-    }
-
-    if ((sockfds[i] = connection_sockfd(hostname, port)) == -1) {
-      perror("connect");
-      fprintf(stderr,
-              "[ERROR] connection attempt to server %zu(%s:%s) failed\n", i,
-              hostname, port);
-      continue;
-    }
-  }
-
-  FD_ZERO(&writefds);
-  for (size_t i = 0; i < dfc_op->n_servers; ++i) {
-    FD_SET(sockfds[i], &writefds);
-  }
-  timeout.tv_sec = CONNECTTIMEO_SEC;
-  timeout.tv_usec = CONNECTTIMEO_USEC;
-
-  for (size_t i = 0; i < dfc_op->n_servers; ++i) {
-    if ((sel_res = select(sockfds[dfc_op->n_servers - 1] + 1, NULL, &writefds,
-                          NULL, &timeout)) > 1) {
-      int so_error;
-      socklen_t len = sizeof(so_error);
-
-      getsockopt(sockfds[i], SOL_SOCKET, SO_ERROR, &so_error, &len);
-
-      if (so_error == 0) {
-        // clear non-blocking flag, if set, leads to incomplete sends/writes
-        // when file is too large for socket buffer
-        int flags = fcntl(sockfds[i], F_GETFL);
-        flags &= ~O_NONBLOCK;
-        fcntl(sockfds[i], F_SETFL, flags);
-#ifdef DEBUG
-        fprintf(stderr, "[INFO] %s(sfd=%d) is open\n", dfc_op->servers[i],
-                sockfds[i]);
-        fflush(stderr);
-#endif
-      } else if (so_error == ECONNREFUSED) {
-#ifdef DEBUG
-        fprintf(stderr, "[ERROR] (%s) %s\n", dfc_op->servers[i],
-                strerror(so_error));
-        fflush(stderr);
-#endif
-        sockfds[i] = -1;
-      } else {
-        perror("connect");
-
-        exit(EXIT_FAILURE);
+  // determine if put can be done
+  if (adjacent_failure(sockfds, n_servers)) {
+    // not connected to enough servers
+    for (size_t i = 0; i < n_servers; ++i) {
+      if (sockfds[i] > 0 && close(sockfds[i]) == -1) {  // close connected sockets, if any
+        perror("close");
       }
     }
+
+    return -1;
   }
+
+  srv_alloc_start = hash_djb2(fname) % n_servers;
+
+  // read file (MAKE THIS ASYNCHRONOUS, JUST HAVE SEND THREAD WAIT TILL ITS DONE
+  if ((file_content = read_file(fname, &len_file)) == NULL) {
+    fprintf(stderr, "[ERROR] failed to read %s: %s\n", fname, strerror(errno));
+    return -1;
+  }
+
+  // get chunk sizes
+  get_chunk_sizes(len_file, n_servers, chunk_sizes);
+  file_pieces = split_file(file_content, chunk_sizes, n_servers);
+
+  // last chunk size will always be maximum
+  if ((pair = alloc_buf(chunk_sizes[n_servers - 1] * 2)) == NULL) {
+    fprintf(stderr, "[FATAL] out of memory\n");
+    exit(EXIT_FAILURE);
+  }
+
+  for (size_t i = 0; i < n_servers; ++i) {
+    srv_id = (srv_alloc_start + i) % n_servers;
+    fprintf(stderr, "[INFO] selected server %zu\n", srv_id);
+
+    len_pair =
+        chunk_sizes[srv_id] + chunk_sizes[(srv_id + 1) % n_servers];
+
+    if ((sk_buf[srv_id].data = alloc_buf(len_pair + sizeof(DFCHeader))) ==
+        NULL) {
+      fprintf(stderr, "[FATAL] out of memory\n");
+      exit(EXIT_FAILURE);
+    }
+
+    if (sockfds[srv_id] == -1) {  // acceptable, decided beforehand
+      continue;
+    }
+
+    pthread_mutex_init(&sk_buf[srv_id].mutex, NULL);
+    pthread_mutex_lock(&sk_buf[srv_id].mutex);
+
+    merge(file_pieces[srv_id], chunk_sizes[srv_id],
+          file_pieces[(srv_id + 1) % n_servers],
+          chunk_sizes[(srv_id + 1) % n_servers], pair);
+
+    sk_buf[srv_id].sockfd = sockfds[srv_id];
+
+    len_hdr = attach_hdr(
+        sk_buf[srv_id].data, "put", fname,
+        chunk_sizes[srv_id] + chunk_sizes[(srv_id + 1) % n_servers]);
+    memcpy(sk_buf[srv_id].data + len_hdr, pair, len_pair);
+
+    sk_buf[srv_id].len_data = len_hdr + len_pair;
+
+    fprintf(stderr, "[INFO] sending pieces %zu, %zu of %s\n",
+            srv_id, (srv_id + 1) % n_servers, fname);
+
+    pthread_mutex_unlock(&sk_buf[srv_id].mutex);
+
+    if (pthread_create(&send_tids[srv_id], NULL, async_dfc_send,
+                       &sk_buf[srv_id])) {
+      fprintf(stderr, "[%s] could not create thread %zu\n", __func__, i);
+      exit(EXIT_FAILURE);
+    }
+
+    ran_threads[srv_id] = 1;
+  }
+
+  for (size_t i = 0; i < n_servers; ++i) {
+    if (ran_threads[i] == 1) {
+      pthread_join(send_tids[i], NULL);
+    }
+  }
+
+  for (size_t i = 0; i < n_servers; ++i) {
+    if (sk_buf[i].data != NULL) {
+      free(sk_buf[i].data);
+    }
+
+    if (file_pieces[i] != NULL) {
+      free(file_pieces[i]);
+    }
+  }
+
+  if (file_pieces != NULL) {
+    free(file_pieces);
+  }
+
+  if (file_content != NULL) {
+    free(file_content);
+  }
+
+  if (pair != NULL) {
+    free(pair);
+  }
+
+  return 0;
 }
 
-void *handle_put(void *arg) {
-  DFCOperation *dfc_op = *(DFCOperation **)arg;
+int handle_put2(DFCOperation *dfc_op) {
   unsigned int srv_alloc_start;
   size_t srv_id, len_file;
   char *file_content, *pair, **file_pieces;
@@ -142,13 +180,10 @@ void *handle_put(void *arg) {
   size_t chunk_sizes[dfc_op->n_servers], len_hdr;
   pthread_t send_tids[dfc_op->n_servers];
   int ran_threads[dfc_op->n_servers];
-  SocketBuffer *sk_buf[dfc_op->n_servers];
-
-  fill_sk_set(dfc_op, sockfds);
+  SocketBuffer sk_buf[dfc_op->n_servers];
 
   // determine if put can be done
   if (adjacent_failure(sockfds, dfc_op->n_servers)) {
-    fprintf(stderr, "[ERROR] put failed\n");
     // not connected to enough servers
     for (size_t i = 0; i < dfc_op->n_servers; ++i) {
       if (sockfds[i] > 0 && close(sockfds[i]) == -1) {
@@ -157,7 +192,12 @@ void *handle_put(void *arg) {
       }
     }
 
-    return NULL;
+    return -1;
+  }
+
+  for (size_t i = 0; i < dfc_op->n_servers; ++i) {
+    sk_buf[i].sockfd = sockfds[i];
+    pthread_mutex_init(&sk_buf[i].mutex, NULL);
   }
 
   fprintf(stderr, "[INFO] preparing files\n");
@@ -188,46 +228,39 @@ void *handle_put(void *arg) {
       fprintf(stderr, "[INFO] selected server %zu(%s)\n", srv_id,
               dfc_op->servers[srv_id]);
 
+      len_pair =
+          chunk_sizes[srv_id] + chunk_sizes[(srv_id + 1) % dfc_op->n_servers];
+
+      if ((sk_buf[srv_id].data = alloc_buf(len_pair + sizeof(DFCHeader))) ==
+          NULL) {
+        fprintf(stderr, "[FATAL] out of memory\n");
+        exit(EXIT_FAILURE);
+      }
+
       if (sockfds[srv_id] == -1) {  // acceptable, decided beforehand
         continue;
       }
 
-      if ((sk_buf[srv_id] = (SocketBuffer *)malloc(sizeof(SocketBuffer))) ==
-          NULL) {
-        fprintf(stderr, "[FATAL] out of memory\n");
+      pthread_mutex_lock(&sk_buf[srv_id].mutex);
 
-        exit(EXIT_FAILURE);
-      }
-
-      pthread_mutex_init(&sk_buf[srv_id]->mutex, NULL);
-
-      pthread_mutex_lock(&sk_buf[srv_id]->mutex);
       merge(file_pieces[srv_id], chunk_sizes[srv_id],
             file_pieces[(srv_id + 1) % dfc_op->n_servers],
             chunk_sizes[(srv_id + 1) % dfc_op->n_servers], pair);
-      len_pair =
-          chunk_sizes[srv_id] + chunk_sizes[(srv_id + 1) % dfc_op->n_servers];
 
-      sk_buf[srv_id]->sockfd = sockfds[srv_id];
-
-      if ((sk_buf[srv_id]->data = alloc_buf(len_pair + sizeof(DFCHeader))) ==
-          NULL) {
-        fprintf(stderr, "[FATAL] out of memory\n");
-        exit(EXIT_FAILURE);
-      }
+      sk_buf[srv_id].sockfd = sockfds[srv_id];
 
       len_hdr = attach_hdr(
-          sk_buf[srv_id]->data, "put", dfc_op->files[i],
+          sk_buf[srv_id].data, "put", dfc_op->files[i],
           chunk_sizes[srv_id] + chunk_sizes[(srv_id + 1) % dfc_op->n_servers]);
-      memcpy(sk_buf[srv_id]->data + len_hdr, pair, len_pair);
+      memcpy(sk_buf[srv_id].data + len_hdr, pair, len_pair);
 
-      sk_buf[srv_id]->len_data = len_hdr + len_pair;
+      sk_buf[srv_id].len_data = len_hdr + len_pair;
 
       fprintf(stderr, "[INFO] sending pieces %zu, %zu of %s to server %s\n",
               srv_id, (srv_id + 1) % dfc_op->n_servers, dfc_op->files[i],
               dfc_op->servers[srv_id]);
 
-      pthread_mutex_unlock(&sk_buf[srv_id]->mutex);
+      pthread_mutex_unlock(&sk_buf[srv_id].mutex);
 
       if (pthread_create(&send_tids[j], NULL, async_dfc_send,
                          &sk_buf[srv_id])) {
@@ -241,18 +274,16 @@ void *handle_put(void *arg) {
     for (size_t j = 0; j < dfc_op->n_servers; ++j) {
       if (ran_threads[j] == 1) {
         pthread_join(send_tids[j], NULL);
+      }
+    }
 
-        if (file_pieces[j] != NULL) {
-          free(file_pieces[j]);
-        }
+    for (size_t j = 0; j < dfc_op->n_servers; ++j) {
+      if (sk_buf[j].data != NULL) {
+        free(sk_buf[j].data);
+      }
 
-        if (sk_buf[j]->data != NULL) {
-          free(sk_buf[j]->data);
-        }
-
-        if (sk_buf[j] != NULL) {
-          free(sk_buf[j]);
-        }
+      if (file_pieces[j] != NULL) {
+        free(file_pieces[j]);
       }
     }
 
@@ -276,7 +307,7 @@ void *handle_put(void *arg) {
     }
   }
 
-  return NULL;
+  return 0;
 }
 
 void print_socket_buffer(SocketBuffer *sb) {
