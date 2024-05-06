@@ -10,32 +10,45 @@
 #define SZ_ARG_MAX 1024
 #define SZ_CMD_MAX 8
 
+// put: offset => where next file starts
+// get: offset => where next piece starts
+// list: offset => unused
+typedef struct {
+  char cmd[SZ_CMD_MAX + 1];
+  char fname[PATH_MAX + 1];
+  size_t chunk_offset;  // offset at which next chunk starts
+  size_t file_offset;  // offset at which next file starts
+} DFCHeader;
+
 typedef struct {
   char cmd[SZ_CMD_MAX];
   unsigned short hash;
 } DFCCommand;
 
 typedef struct {
-  char **files;
-  size_t n_files;
+  char fname[PATH_MAX + 1];
   char **servers;
   size_t n_servers;
 } DFCOperation;
 
-#define N_CMD_SUPP sizeof(dfc_cmds) / sizeof(dfc_cmds[0])
+typedef struct {
+  char fname[PATH_MAX + 1];
+  int *sockfds;
+  size_t n_servers;
+} GetOperation;
 
 typedef struct {
-  char cmd[SZ_CMD_MAX];
-  char fname[PATH_MAX];
-  size_t offset;
-} DFCHeader;
-#define DFC_HDRSZ sizeof(DFCHeader)
+  char fname[PATH_MAX + 1];
+  int *sockfds;
+  size_t n_servers;
+} PutOperation;
+
+#define N_CMD_SUPP sizeof(dfc_cmds) / sizeof(dfc_cmds[0])
 
 typedef struct {
   int sockfd;
   char *data;
   ssize_t len_data;
-  pthread_mutex_t mutex;
 } SocketBuffer;
 
 #endif  // TYPES_H_

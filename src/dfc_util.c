@@ -1,8 +1,11 @@
 #include <ctype.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include "dfc/dfc_util.h"
 
@@ -17,16 +20,21 @@ char *alloc_buf(size_t size) {
   return buf;
 }
 
-size_t attach_hdr(char *buf, const char *cmd, char *fname, size_t offset) {
+size_t attach_hdr(char *buf, DFCHeader *dfc_hdr) {
   size_t len_hdr;
 
-  strncpy(buf, cmd, strlen(cmd) + 1);
-  len_hdr = strlen(cmd) + 1;
+  len_hdr = 0;
 
-  strncpy(buf + len_hdr, fname, strlen(fname) + 1);
-  len_hdr += strlen(fname) + 1;
+  memcpy(buf, dfc_hdr->cmd, sizeof(dfc_hdr->cmd));
+  len_hdr += sizeof(dfc_hdr->cmd);
 
-  memcpy(buf + len_hdr, &offset, sizeof(size_t));
+  memcpy(buf + len_hdr, dfc_hdr->fname, sizeof(dfc_hdr->fname));
+  len_hdr += sizeof(dfc_hdr->fname);
+
+  memcpy(buf + len_hdr, &dfc_hdr->chunk_offset, sizeof(size_t));
+  len_hdr += sizeof(size_t);
+
+  memcpy(buf + len_hdr, &dfc_hdr->file_offset, sizeof(size_t));
   len_hdr += sizeof(size_t);
 
   return len_hdr;
@@ -163,34 +171,44 @@ DFCOperation *read_config() {
   return dfc_op;
 }
 
-char *read_file(const char *fpath, size_t *nb_read) {
+char *read_file(const char *fpath, ssize_t *bytes_read) {
   char *out_buf;
-  FILE *fp;
+  int fd;
   struct stat st;
 
-  if ((fp = fopen(fpath, "rb")) == NULL) {
-    // server error
+  if ((fd = open(fpath, O_RDONLY)) == -1) {
+    fprintf(stderr, "[%s] failed to open %s: %s\n", __func__, fpath, strerror(errno));
     return NULL;
   }
 
   if (stat(fpath, &st) < 0) {
-    // server error
-    fclose(fp);
-
+    if (close(fd) == -1) {
+      fprintf(stderr, "[%s] failed to stat %s: %s\n", __func__, fpath, strerror(errno));
+      exit(EXIT_FAILURE);
+    }
     return NULL;
   }
 
-  out_buf = alloc_buf(st.st_size);
-  chk_alloc_err(out_buf, "malloc", __func__, __LINE__ - 1);
+  if ((out_buf = alloc_buf(st.st_size)) == NULL) {
+    fprintf(stderr, "[%s] out of memory\n", __func__);
+    exit(EXIT_FAILURE);
+  }
 
-  if ((*nb_read = fread(out_buf, 1, st.st_size, fp)) < (size_t)st.st_size) {
-    fclose(fp);
+  if ((*bytes_read = read(fd, out_buf, st.st_size)) < (ssize_t)st.st_size) {
+    if (close(fd) == -1) {
+      fprintf(stderr, "[%s] failed to close %s: %s\n", __func__, fpath, strerror(errno));
+      exit(EXIT_FAILURE);
+    }
+
     free(out_buf);
 
     return NULL;
   }
 
-  fclose(fp);
+  if (close(fd) == -1) {
+    fprintf(stderr, "[%s] failed to close %s: %s\n", __func__, fpath, strerror(errno));
+    exit(EXIT_FAILURE);
+  }
 
   return out_buf;
 }
@@ -218,6 +236,19 @@ ssize_t read_until(char *haystack, size_t len_haystack, char end, char *sink,
 
   // move pointer to next character
   return (ssize_t)i + 1;
+}
+
+char *realloc_buf(char *buf, size_t size) {
+  char *tmp_buf;
+
+  tmp_buf = realloc(buf, size);
+  if (chk_alloc_err(tmp_buf, "realloc", __func__, __LINE__ - 1) == -1) {
+    return NULL;
+  }
+
+  buf = tmp_buf;
+
+  return buf;
 }
 
 char **split_file(char *file_contents, size_t *chunk_sizes, size_t n_chunks) {
@@ -251,6 +282,7 @@ void print_header(DFCHeader *dfc_hdr) {
   fputs("DFCHeader {\n", stderr);
   fprintf(stderr, "  cmd: %s\n", dfc_hdr->cmd);
   fprintf(stderr, "  filename: %s\n", dfc_hdr->fname);
-  fprintf(stderr, "  offset: %zu\n", dfc_hdr->offset);
+  fprintf(stderr, "  chunk_offset: %zu\n", dfc_hdr->chunk_offset);
+  fprintf(stderr, "  file_offset: %zu\n", dfc_hdr->file_offset);
   fputs("}\n", stderr);
 }

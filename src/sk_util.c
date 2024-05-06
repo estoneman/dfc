@@ -75,6 +75,50 @@ int connection_sockfd(const char *hostname, const char *port) {
   return sockfd;
 }
 
+char *dfc_recv(int sockfd, ssize_t *nb_recv) {
+  char *recv_buf;
+  size_t total_nb_recv, num_reallocs, bytes_alloced, realloc_sz;
+
+  if ((recv_buf = alloc_buf(RCVCHUNK)) == NULL) {
+    fprintf(stderr, "failed to allocate receive buffer (%s:%d)", __func__,
+            __LINE__ - 1);
+    return NULL;
+  }
+
+  bytes_alloced = RCVCHUNK;
+
+  total_nb_recv = realloc_sz = num_reallocs = 0;
+  while ((*nb_recv = recv(sockfd, recv_buf + total_nb_recv, RCVCHUNK, 0)) >
+         0) {
+    total_nb_recv += *nb_recv;
+
+    if (total_nb_recv + RCVCHUNK >= bytes_alloced) {
+      realloc_sz = bytes_alloced * 2;
+      if ((recv_buf = realloc_buf(recv_buf, realloc_sz)) == NULL) {
+        fprintf(stderr, "[FATAL] out of memory: attempted realloc size = %zu\n",
+                realloc_sz);
+        free(recv_buf);  // free old buffer
+
+        exit(EXIT_FAILURE);
+      }
+    }
+
+    bytes_alloced = realloc_sz;
+    num_reallocs++;
+  }
+
+  *nb_recv = total_nb_recv;
+
+  if (total_nb_recv == 0) {  // timeout
+    perror("recv");
+    free(recv_buf);
+
+    return NULL;
+  }
+
+  return recv_buf;
+}
+
 ssize_t dfc_send(int sockfd, char *send_buf, size_t len_send_buf) {
   ssize_t nb_sent;
 
@@ -170,8 +214,8 @@ void set_timeout(int sockfd, long tv_sec, long tv_usec) {
   rcvtimeo.tv_usec = tv_usec;
   if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &rcvtimeo, sizeof(rcvtimeo)) <
       0) {
-    perror("setsockopt");
-    close(sockfd);
+    fprintf(stderr, "[%s] failed to setsockopt (sfd=%d): %s\n", __func__,
+            sockfd, strerror(errno));
     exit(EXIT_FAILURE);
   }
 }

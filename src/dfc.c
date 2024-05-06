@@ -18,7 +18,7 @@ DFCCommand dfc_cmds[] = {{.cmd = "get", .hash = 0},
 int run_handler(int argc, char *argv[]) {
   DFCOperation *dfc_op;
   unsigned int cmd_hash;
-  // pthread_t handler_tid;
+  pthread_t handler_tid;
 
   if ((dfc_op = read_config()) == NULL) {
     return -1;
@@ -28,114 +28,166 @@ int run_handler(int argc, char *argv[]) {
   argc -= 1;
   argv += 1;
 
-  if ((dfc_op->files = (char **)malloc(sizeof(char *) * argc)) == NULL) {
-    fprintf(stderr, "[ERORR] out of memory\n");
+  int sockfds[dfc_op->n_servers];
+  fill_sk_set(dfc_op, sockfds);
+  if (cmd_hash == hash_djb2("get")) {
+    if (argc == 0) {
+      fprintf(stderr, "[ERROR] Expected files\n");
 
-    exit(EXIT_FAILURE);
-  }
+      return EXIT_FAILURE;
+    }
 
-  dfc_op->n_files = 0;
-  for (int i = 0; i < argc; ++i) {
-    if ((dfc_op->files[i] = (char *)alloc_buf(PATH_MAX + 1)) == NULL) {
-      fprintf(stderr, "[ERROR] out of memory\n");
+    strncpy(dfc_op->fname, argv[0], PATH_MAX);
 
+    GetOperation get_op;
+    // copy filename into DFCOperation structure, if readable and exists
+    if (adjacent_failure(sockfds, dfc_op->n_servers)) {
+      fprintf(stderr, "[%s] get %s failed \n", __func__, dfc_op->fname);
+      for (size_t i = 0; i < dfc_op->n_servers; ++i) {
+        if (sockfds[i] > 0 && close(sockfds[i]) == -1) {  // close connected sockets, if any
+          fprintf(stderr, "[%s] failed to close sfd=%d: %s\n", __func__,
+                  sockfds[i], strerror(errno));
+        }
+      }
+
+      return -1;
+    }
+
+    if ((get_op.sockfds = malloc(sizeof(int) * dfc_op->n_servers)) == NULL) {
+      fprintf(stderr, "[FATAL] out of memory\n");
       exit(EXIT_FAILURE);
     }
-  }
 
-  // copy filenames into DFCOperation structure, if readable and exist
-  for (int i = 0; i < argc; ++i) {
-    if (access(argv[i], R_OK) == -1) {
+    for (size_t j = 0; j < dfc_op->n_servers; ++j) {
+      if (sockfds[j] > 0) {
+        get_op.sockfds[j] = sockfds[j];
+        set_timeout(get_op.sockfds[j], RCVTIMEO_SEC, RCVTIMEO_USEC);
+      }
+    }
+
+    get_op.n_servers = dfc_op->n_servers;
+    strncpy(get_op.fname, dfc_op->fname, PATH_MAX);
+
+    if (pthread_create(&handler_tid, NULL, get_handle, &get_op) < 0) {
+      fprintf(stderr, "[ERROR] could not create thread\n");
+      exit(EXIT_FAILURE);
+    }
+
+    pthread_join(handler_tid, NULL);
+
+    // free(get_op.sockfds);
+  } else if (cmd_hash == hash_djb2("put")) {
+    if (argc == 0) {
+      fprintf(stderr, "[ERROR] Expected files\n");
+
+      return EXIT_FAILURE;
+    }
+
+    strncpy(dfc_op->fname, argv[0], PATH_MAX);
+
+    PutOperation put_op;
+
+    if (access(argv[0], R_OK) == -1) {
       if (errno == ENOENT) {
-        fprintf(stderr, "[ERROR] %s not found, skipping\n", argv[i]);
+        fprintf(stderr, "[ERROR] file %s not found\n", argv[0]);
       } else if (errno == EACCES) {
-        fprintf(stderr, "[ERROR] %s not readable, skipping\n", argv[i]);
+        fprintf(stderr, "[ERROR] file %s not readable\n", argv[0]);
       } else {
         perror("[ERROR]");
       }
 
-      continue;
+      return -1;
     }
 
-    strncpy(dfc_op->files[i], argv[i], PATH_MAX);
-    dfc_op->n_files++;
-  }
+    if (adjacent_failure(sockfds, dfc_op->n_servers)) {
+      fprintf(stderr, "[%s] put %s failed \n", __func__, dfc_op->fname);
+      for (size_t j = 0; j < dfc_op->n_servers; ++j) {
+        if (sockfds[j] > 0 && close(sockfds[j]) == -1) {  // close connected sockets, if any
+          fprintf(stderr, "[%s] failed to close sfd=%d: %s\n", __func__,
+                  sockfds[j], strerror(errno));
+        }
+      }
+      return -1;
+   }
 
-  int sockfds[dfc_op->n_servers];
-
-  if (cmd_hash == hash_djb2("get")) {
-    if (dfc_op->n_files == 0) {
-      fprintf(stderr, "[ERROR] Expected files\n");
-
-      return EXIT_FAILURE;
-    }
-  } else if (cmd_hash == hash_djb2("put")) {
-    if (dfc_op->n_files == 0) {
-      fprintf(stderr, "[ERROR] Expected files\n");
-
-      return EXIT_FAILURE;
+    if ((put_op.sockfds = malloc(sizeof(int) * dfc_op->n_servers)) == NULL) {
+      fprintf(stderr, "[FATAL] out of memory\n");
+      exit(EXIT_FAILURE);
     }
 
-    fill_sk_set(dfc_op, sockfds);
-
-    int res;
-    size_t n_servers;
-
-    n_servers = sizeof(sockfds) / sizeof(sockfds[0]);
-    fprintf(stderr, "[INFO] putting %zu files\n", dfc_op->n_files);
-    for (size_t i = 0; i < dfc_op->n_files; ++i) {
-      if ((res = handle_put(dfc_op->files[i], sockfds, n_servers)) == -1) {
-        fprintf(stderr, "[ERROR] put %s failed\n", dfc_op->files[i]);
+    for (size_t j = 0; j < dfc_op->n_servers; ++j) {
+      if (sockfds[j] > 0) {
+        put_op.sockfds[j] = sockfds[j];
+        set_timeout(put_op.sockfds[j], RCVTIMEO_SEC, RCVTIMEO_USEC);
       }
     }
 
+    put_op.n_servers = dfc_op->n_servers;
+    strncpy(put_op.fname, argv[0], PATH_MAX);
+    if (pthread_create(&handler_tid, NULL, put_handle, &put_op) < 0) {
+      fprintf(stderr, "[ERROR] could not create thread\n");
+      exit(EXIT_FAILURE);
+    }
+
+    pthread_join(handler_tid, NULL);
+
+    free(put_op.sockfds);
   } else {  // list
-    fprintf(stderr, "[INFO] querying for files\n");
+    int *list_fd;
+
+    if ((list_fd = malloc(sizeof(int))) == NULL) {
+      fprintf(stderr, "[FATAL] out of memory\n");
+      exit(EXIT_FAILURE);
+    }
+
+    if (adjacent_failure(sockfds, dfc_op->n_servers)) {
+      fprintf(stderr, "[%s] put %s failed \n", __func__, dfc_op->fname);
+      for (size_t j = 0; j < dfc_op->n_servers; ++j) {
+        if (sockfds[j] > 0 && close(sockfds[j]) == -1) {  // close connected sockets, if any
+          fprintf(stderr, "[%s] failed to close sfd=%d: %s\n", __func__,
+                  sockfds[j], strerror(errno));
+        }
+      }
+
+      free(list_fd);
+      return -1;
+    }
+
+    // only need a single connection
+    for (size_t i = 0; i < dfc_op->n_servers; ++i) {
+      if (sockfds[i] > 0) {
+        *list_fd = sockfds[i];
+        set_timeout(*list_fd, RCVTIMEO_SEC, RCVTIMEO_USEC);
+        break;
+      }
+    }
+
+    if (pthread_create(&handler_tid, NULL, list_handle, list_fd) < 0) {
+      fprintf(stderr, "[ERROR] could not create thread\n");
+      exit(EXIT_FAILURE);
+    }
+
+    pthread_join(handler_tid, NULL);
+
+    free(list_fd);
   }
 
-  // pthread_join(handler_tid, NULL);
+  for (size_t i = 0; i < dfc_op->n_servers; ++i) {
+    if (sockfds[i] > 0 && close(sockfds[i]) == -1) {
+      fprintf(stderr, "[%s] failed to close sfd=%d: %s\n", __func__, sockfds[i], strerror(errno));
+      exit(EXIT_FAILURE);
+    }
+    fprintf(stderr, "[%s] close sfd=%d success\n", __func__, sockfds[i]);
+  }
 
   for (size_t i = 0; i < MAX_SERVERS; ++i) {
     free(dfc_op->servers[i]);
   }
   free(dfc_op->servers);
 
-  for (size_t i = 0; i < dfc_op->n_files; ++i) {
-    free(dfc_op->files[i]);
-  }
-  free(dfc_op->files);
-
   free(dfc_op);
 
   return 0;
-}
-
-void print_cmd(DFCCommand dfc_cmd) {
-  fprintf(stderr, "DFCCommand = {\n");
-  fprintf(stderr, "  cmd = %s\n", dfc_cmd.cmd);
-  fprintf(stderr, "  hash = %d\n", dfc_cmd.hash);
-  fprintf(stderr, "}\n");
-}
-
-void print_cmds(void) {
-  for (size_t i = 0; i < N_CMD_SUPP; ++i) {
-    print_cmd(dfc_cmds[i]);
-  }
-}
-
-void print_op(DFCOperation *dfc_op) {
-  fprintf(stderr, "DFCOperation {\n");
-  fprintf(stderr, "  filenames (%zu) {\n", dfc_op->n_files);
-  for (size_t i = 0; i < dfc_op->n_files; ++i) {
-    fprintf(stderr, "    %s\n", dfc_op->files[i]);
-  }
-  fputs("  }\n", stderr);
-  fprintf(stderr, "  servers (%zu) {\n", dfc_op->n_servers);
-  for (size_t i = 0; i < dfc_op->n_servers; ++i) {
-    fprintf(stderr, "    %s\n", dfc_op->servers[i]);
-  }
-  fputs("  }\n", stderr);
-  fputs("}\n", stderr);
 }
 
 void usage(const char *program) {
@@ -184,95 +236,10 @@ int main(int argc, char *argv[]) {
 
   // given n filenames, run command on each of them
   if (run_handler(argc - 1, argv) != 0) {
-    fprintf(stderr, "[ERROR] %s handler failed\n", cmd);
     destroy_bloom_filter(bf);
-
     exit(EXIT_FAILURE);
   }
 
   destroy_bloom_filter(bf);
-
   return EXIT_SUCCESS;
 }
-
-/*
-int run_handler2(char **argv, unsigned int cmd_hash, size_t n_files) {
-  DFCConfig *dfc_config;
-  DFCOperation dfc_op[n_files];
-  pthread_t file_proc_tids[n_files];
-
-  if ((dfc_config = read_config()) == NULL) {
-    fprintf(stderr, "[ERROR] failed to read config\n");
-
-    return EXIT_FAILURE;
-  }
-
-  if (cmd_hash == hash_fnv1a("get")) {
-    if (n_files == 0) {
-      fprintf(
-          stderr,
-          "[ERROR] invalid get invocation, requires at least one file path\n");
-      usage(argv[0]);
-
-      return EXIT_FAILURE;
-    }
-
-    for (size_t i = 0; i < n_files; ++i) {
-      strncpy(dfc_op[i].filename, argv[i], PATH_MAX);
-      dfc_op[i].dfc_config = dfc_config;
-
-      file_proc_tids[i] = i;
-      if (pthread_create(&file_proc_tids[i], NULL, handle_get, &dfc_op[i]) <
-          0) {
-        fprintf(stderr, "[ERROR] could not create thread: %s:%d\n", __func__,
-                __LINE__ - 1);
-        exit(EXIT_FAILURE);
-      }
-    }
-  } else if (cmd_hash == hash_fnv1a("put")) {
-    if (n_files == 0) {
-      fprintf(
-          stderr,
-          "[ERROR] invalid put invocation, requires at least one file path\n");
-      usage(argv[0]);
-
-      return EXIT_FAILURE;
-    }
-
-    for (size_t i = 0; i < n_files; ++i) {
-      strncpy(dfc_op[i].filename, argv[i], PATH_MAX);
-      dfc_op[i].dfc_config = dfc_config;
-
-      if (pthread_create(&file_proc_tids[i], NULL, handle_put, &dfc_op[i]) <
-          0) {
-        fprintf(stderr, "[ERROR] could not create thread: %s:%d\n", __func__,
-                __LINE__ - 1);
-        exit(EXIT_FAILURE);
-      }
-    }
-  } else {  // list
-    fprintf(stderr, "[INFO] querying for files... \n");
-
-    if (pthread_create(&file_proc_tids[0], NULL, handle_list, NULL) < 0) {
-      fprintf(stderr, "[ERROR] could not create thread: %s:%d\n", __func__,
-              __LINE__ - 2);
-      exit(EXIT_FAILURE);
-    }
-  }
-
-  // free resources
-  for (size_t i = 0; i < n_files; ++i) {
-    pthread_join(file_proc_tids[i], NULL);
-  }
-
-  for (size_t i = 0; i < dfc_config->n_servers; ++i) {
-    free(dfc_config->servers[i]);
-  }
-
-  free(dfc_config->servers);
-  free(dfc_config);
-
-  return 0;
-}
-
- */
